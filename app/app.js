@@ -2162,8 +2162,15 @@
 
     // --- editor is open: never blow away unsaved work ---
     if (editingDoc) {
-      const stillExists = state.docsByPath.has(editingDoc.path);
-      const wasTouched = changedPaths.has(editingDoc.path);
+      const fresh = state.docsByPath.get(editingDoc.path);
+      const stillExists = !!fresh;
+      // The watcher fires for *every* write, including our own save. To avoid
+      // flagging the user's own save as a foreign change, compare the freshly
+      // indexed mtime against editingDoc.mtime (which doSave bumped to the
+      // mtime the server returned). Equal → it was our write; skip the banner.
+      const wasTouched = stillExists
+        && changedPaths.has(editingDoc.path)
+        && fresh.mtime !== editingDoc.mtime;
       if (!stillExists) {
         showEditorStaleBanner({ deleted: true });
       } else if (wasTouched) {
