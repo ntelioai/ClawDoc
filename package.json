@@ -1,8 +1,9 @@
 {
-  "name": "mdown",
-  "version": "0.2.0",
+  "name": "clawdoc",
+  "productName": "ClawDoc",
+  "version": "0.1.0",
   "private": true,
-  "description": "Local Markdown/HTML browser with embedded Claude Code terminal.",
+  "description": "Local Markdown/HTML/PDF doc browser with an embedded Claude Code terminal.",
   "main": "electron-main.js",
   "bin": {
     "mdown": "./serve.js"

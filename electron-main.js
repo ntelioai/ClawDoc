@@ -106,7 +106,13 @@ async function start() {
     width: 1400,
     height: 900,
     title: 'mdown',
-    webPreferences: { contextIsolation: true, nodeIntegration: false },
+    webPreferences: {
+      contextIsolation: true,
+      nodeIntegration: false,
+      // Enables the Chromium PDF viewer extension so <embed type="application/pdf">
+      // renders inline (off by default in Electron BrowserWindows).
+      plugins: true,
+    },
   });
   win.loadURL(`http://127.0.0.1:${PORT}/`);
 }
@@ -122,7 +128,13 @@ app.on('activate', () => {
       width: 1400,
       height: 900,
       title: 'mdown',
-      webPreferences: { contextIsolation: true, nodeIntegration: false },
+      webPreferences: {
+      contextIsolation: true,
+      nodeIntegration: false,
+      // Enables the Chromium PDF viewer extension so <embed type="application/pdf">
+      // renders inline (off by default in Electron BrowserWindows).
+      plugins: true,
+    },
     });
     win.loadURL(`http://127.0.0.1:${PORT}/`);
   }
