@@ -1,13 +1,13 @@
 // GitHub helpers: OAuth Device Flow + minimal REST calls.
 //
 // The Device Flow needs a registered GitHub OAuth App's client_id. Set it via
-// `MDOWN_GITHUB_CLIENT_ID`. If unset, the UI falls back to "paste a personal
+// `CLAWDOC_GITHUB_CLIENT_ID`. If unset, the UI falls back to "paste a personal
 // access token" which works without any app registration.
 
 const { createOAuthDeviceAuth } = require('@octokit/auth-oauth-device');
 const { request } = require('@octokit/request');
 
-const CLIENT_ID = process.env.MDOWN_GITHUB_CLIENT_ID || '';
+const CLIENT_ID = process.env.CLAWDOC_GITHUB_CLIENT_ID || '';
 const SCOPES = ['repo'];
 
 // In-memory map of active device-flow sessions keyed by an opaque id we mint.
@@ -18,7 +18,7 @@ const sessions = new Map();
 function deviceFlowAvailable() { return !!CLIENT_ID; }
 
 function startDeviceFlow() {
-  if (!CLIENT_ID) throw new Error('MDOWN_GITHUB_CLIENT_ID is not set');
+  if (!CLIENT_ID) throw new Error('CLAWDOC_GITHUB_CLIENT_ID is not set');
   const id = 'df_' + Math.random().toString(36).slice(2) + Date.now().toString(36);
   const session = { id, verification: null, token: null, error: null, done: false };
 

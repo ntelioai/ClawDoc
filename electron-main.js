@@ -1,11 +1,11 @@
-// Electron entry for mdown. Boots the existing Node server in-process, then
+// Electron entry for ClawDoc. Boots the existing Node server in-process, then
 // opens a BrowserWindow pointing at the local URL.
 //
 // Strategy:
-//  - Redirect MDOWN_DATA_DIR to Electron's userData so settings.json and
+//  - Redirect CLAWDOC_DATA_DIR to Electron's userData so settings.json and
 //    index.json live in a writable location when packaged.
-//  - On first launch (no settings.json, no MDOWN_ROOT), prompt the user for a
-//    workspace folder and persist it via MDOWN_ROOT before requiring serve.js.
+//  - On first launch (no settings.json, no CLAWDOC_ROOT), prompt the user for a
+//    workspace folder and persist it via CLAWDOC_ROOT before requiring serve.js.
 //  - Wait for the HTTP port to accept connections, then open the window.
 
 const { app, BrowserWindow, dialog } = require('electron');
@@ -14,7 +14,7 @@ const fs = require('fs');
 const net = require('net');
 
 // Picked at startup so the packaged app never collides with a dev instance.
-let PORT = Number(process.env.MDOWN_PORT) || 0;
+let PORT = Number(process.env.CLAWDOC_PORT) || 0;
 
 function pickFreePort() {
   return new Promise((resolve, reject) => {
@@ -44,7 +44,7 @@ async function waitForPort(port, host, timeoutMs = 10000) {
 
 function pickWorkspaceSync() {
   const result = dialog.showOpenDialogSync({
-    title: 'Choose a workspace folder for mdown',
+    title: 'Choose a workspace folder for ClawDoc',
     properties: ['openDirectory', 'createDirectory'],
     buttonLabel: 'Use this folder',
   });
@@ -58,16 +58,16 @@ async function start() {
   // Redirect serve.js's writable files (settings.json, index.json) to userData.
   const dataDir = app.getPath('userData');
   fs.mkdirSync(dataDir, { recursive: true });
-  process.env.MDOWN_DATA_DIR = dataDir;
+  process.env.CLAWDOC_DATA_DIR = dataDir;
 
   // Pick a free port if one wasn't supplied via env, then make it visible to
-  // serve.js (which reads process.env.MDOWN_PORT at require time).
+  // serve.js (which reads process.env.CLAWDOC_PORT at require time).
   if (!PORT) PORT = await pickFreePort();
-  process.env.MDOWN_PORT = String(PORT);
+  process.env.CLAWDOC_PORT = String(PORT);
 
   // Mirror Electron's log to a file in userData so packaged-app failures are
   // diagnosable even when the helper window flashes and dies.
-  const logPath = path.join(dataDir, 'mdown.log');
+  const logPath = path.join(dataDir, 'clawdoc.log');
   const logStream = fs.createWriteStream(logPath, { flags: 'a' });
   const tee = (orig) => (...args) => {
     try { logStream.write(args.map(String).join(' ') + '\n'); } catch {}
@@ -75,29 +75,29 @@ async function start() {
   };
   console.log = tee(console.log);
   console.error = tee(console.error);
-  console.log(`[mdown] boot pid=${process.pid} port=${PORT} data=${dataDir}`);
+  console.log(`[clawdoc] boot pid=${process.pid} port=${PORT} data=${dataDir}`);
 
-  // Determine workspace root. Order: existing settings.json → MDOWN_ROOT env
+  // Determine workspace root. Order: existing settings.json → CLAWDOC_ROOT env
   // → folder picker.
   const settingsPath = path.join(dataDir, 'settings.json');
   const hasSettings = fs.existsSync(settingsPath);
-  if (!hasSettings && !process.env.MDOWN_ROOT) {
+  if (!hasSettings && !process.env.CLAWDOC_ROOT) {
     const picked = pickWorkspaceSync();
     if (!picked) { app.quit(); return; }
-    process.env.MDOWN_ROOT = picked;
+    process.env.CLAWDOC_ROOT = picked;
   }
 
-  // Boot the existing mdown server. It starts listening on require().
+  // Boot the embedded ClawDoc server. It starts listening on require().
   try {
     require('./serve.js');
   } catch (err) {
-    console.error('[mdown] serve.js threw on require:', err && err.stack || err);
+    console.error('[clawdoc] serve.js threw on require:', err && err.stack || err);
     throw err;
   }
 
   const up = await waitForPort(PORT, '127.0.0.1', 10000);
   if (!up) {
-    dialog.showErrorBox('mdown', `Server did not start on port ${PORT}.`);
+    dialog.showErrorBox('ClawDoc', `Server did not start on port ${PORT}.`);
     app.quit();
     return;
   }
@@ -105,7 +105,7 @@ async function start() {
   const win = new BrowserWindow({
     width: 1400,
     height: 900,
-    title: 'mdown',
+    title: 'ClawDoc',
     webPreferences: {
       contextIsolation: true,
       nodeIntegration: false,
@@ -127,7 +127,7 @@ app.on('activate', () => {
     const win = new BrowserWindow({
       width: 1400,
       height: 900,
-      title: 'mdown',
+      title: 'ClawDoc',
       webPreferences: {
       contextIsolation: true,
       nodeIntegration: false,
@@ -141,14 +141,14 @@ app.on('activate', () => {
 });
 
 process.on('uncaughtException', err => {
-  try { console.error('[mdown] uncaughtException:', err && err.stack || err); } catch {}
+  try { console.error('[clawdoc] uncaughtException:', err && err.stack || err); } catch {}
 });
 process.on('unhandledRejection', err => {
-  try { console.error('[mdown] unhandledRejection:', err && err.stack || err); } catch {}
+  try { console.error('[clawdoc] unhandledRejection:', err && err.stack || err); } catch {}
 });
 
 start().catch(err => {
-  try { console.error('[mdown] start() rejected:', err && err.stack || err); } catch {}
-  dialog.showErrorBox('mdown failed to start', String(err && err.stack || err));
+  try { console.error('[clawdoc] start() rejected:', err && err.stack || err); } catch {}
+  dialog.showErrorBox('ClawDoc failed to start', String(err && err.stack || err));
   app.quit();
 });

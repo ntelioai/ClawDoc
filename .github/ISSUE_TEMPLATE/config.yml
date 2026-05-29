@@ -1,0 +1,11 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Security vulnerability
+    url: https://github.com/ntelioai/ClawDoc/security/advisories/new
+    about: Please report security issues privately. Do not open a public issue.
+  - name: Commercial license inquiry
+    url: mailto:rabih@ntelio.ai
+    about: AGPL doesn't fit your distribution model? Get in touch about a non-AGPL license.
+  - name: General question
+    url: https://github.com/ntelioai/ClawDoc/discussions
+    about: For questions and discussion, use GitHub Discussions instead of issues.

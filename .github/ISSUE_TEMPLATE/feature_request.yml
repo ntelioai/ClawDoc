@@ -1,0 +1,49 @@
+name: Feature request
+description: Suggest a new capability or improvement.
+title: "[Feature]: "
+labels: ["enhancement", "triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Before opening a feature request, please skim the [Caveats](https://github.com/ntelioai/ClawDoc/blob/main/README.md#caveats) section of the README and the existing [issues](https://github.com/ntelioai/ClawDoc/issues?q=is%3Aissue) to see if it's already on the radar.
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: What's the problem you're trying to solve?
+      description: Describe the situation that makes you want this feature. Don't lead with the proposed solution — lead with the friction.
+      placeholder: "When I have N markdown files in a folder, ..."
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed solution
+      description: What would the ideal behavior look like? UI sketches, terminal flows, keyboard shortcuts — whatever helps make it concrete.
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives you considered
+      description: Other ways the same problem could be solved, including doing nothing.
+
+  - type: dropdown
+    id: scope
+    attributes:
+      label: How load-bearing is this for you?
+      options:
+        - "Nice to have — would be cleaner"
+        - "Workaround exists but it's annoying"
+        - "Blocker — I can't use ClawDoc for X without it"
+    validations:
+      required: true
+
+  - type: textarea
+    id: extra
+    attributes:
+      label: Anything else?
+      description: Links to similar features in other tools, related issues, screenshots of mockups, etc.

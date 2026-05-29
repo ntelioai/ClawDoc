@@ -44,7 +44,7 @@ The first time you launch ClawDoc, it shows a folder picker. Choose the folder y
 - **Embedded Claude terminal** — a real PTY (via [xterm.js](https://xtermjs.org/) + [node-pty](https://github.com/microsoft/node-pty)) bound to the `claude` CLI, cwd'd to the doc's workspace.
 - **Multiple workspaces** — attach more than one folder; each shows up as its own top-level tree.
 - **Quick open** (`Cmd/Ctrl+P`) and global search (`/`).
-- **Git-aware** — built-in `isomorphic-git` integration commits document edits with `mdown: edit <files>` messages, and optionally auto-pushes to GitHub if you've signed in.
+- **Git-aware** — built-in `isomorphic-git` integration commits document edits with `clawdoc: edit <files>` messages, and optionally auto-pushes to GitHub if you've signed in.
 
 ### Keyboard
 
@@ -93,13 +93,14 @@ Files there:
 
 - `settings.json` — workspace list, git config, GitHub token (mode 0600)
 - `index.json` — generated index of every Markdown/HTML/PDF in your workspaces (rebuilt on demand via the **Reindex** button)
-- `mdown.log` — Electron + server log
+- `clawdoc.log` — Electron + server log
 
 Environment overrides:
 
-- `MDOWN_ROOT=/path/to/workspace` — skip the picker on first launch
-- `MDOWN_PORT=7879` — pin the embedded server's port (default: random free port)
-- `MDOWN_DATA_DIR=/some/dir` — override where `settings.json` / `index.json` / `mdown.log` live
+- `CLAWDOC_ROOT=/path/to/workspace` — skip the picker on first launch
+- `CLAWDOC_PORT=7879` — pin the embedded server's port (default: random free port)
+- `CLAWDOC_DATA_DIR=/some/dir` — override where `settings.json` / `index.json` / `clawdoc.log` live
+- `CLAWDOC_GITHUB_CLIENT_ID=<oauth-app-id>` — enable GitHub OAuth Device Flow; without it the UI falls back to a personal-access-token paste
 
 ---
 
@@ -123,4 +124,8 @@ Environment overrides:
 
 ## License
 
-Internal / proprietary — not licensed for redistribution. Contact [rabih@ntelio.ai](mailto:rabih@ntelio.ai) if you'd like to use it.
+ClawDoc is released under the [GNU Affero General Public License, version 3](LICENSE) (AGPL-3.0-only).
+
+In short: you can use, modify, and self-host ClawDoc freely. If you offer it as a hosted service or distribute a modified version, the AGPL requires you to make the corresponding source code available to your users under the same license. For a non-AGPL commercial license, contact [rabih@ntelio.ai](mailto:rabih@ntelio.ai).
+
+Copyright © 2026 Ntelio LLC.

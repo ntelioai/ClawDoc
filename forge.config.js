@@ -1,4 +1,4 @@
-// Electron Forge config for ClawDoc (currently still named mdown internally).
+// Electron Forge config for ClawDoc.
 // Produces a universal macOS .dmg, plus zip/squirrel/deb/rpm for other targets.
 
 const fs = require('fs');
@@ -83,7 +83,7 @@ module.exports = {
     ignore: [
       /^\/index\.json$/,
       /^\/settings\.json$/,
-      /^\/\.mdownignore$/,
+      /^\/\.clawdocignore$/,
       /^\/REQUIREMENTS\.md$/,
       /^\/README\.md$/,
       /^\/out($|\/)/,

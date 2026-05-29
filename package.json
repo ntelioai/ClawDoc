@@ -2,11 +2,35 @@
   "name": "clawdoc",
   "productName": "ClawDoc",
   "version": "0.1.0",
-  "private": true,
   "description": "Local Markdown/HTML/PDF doc browser with an embedded Claude Code terminal.",
+  "license": "AGPL-3.0-only",
+  "author": {
+    "name": "Ntelio LLC / Rabih Nassar",
+    "email": "rabih@ntelio.ai",
+    "url": "https://ntelio.ai/"
+  },
+  "homepage": "https://ntelio.ai/clawdoc.html",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/ntelioai/ClawDoc.git"
+  },
+  "bugs": {
+    "url": "https://github.com/ntelioai/ClawDoc/issues"
+  },
+  "keywords": [
+    "markdown",
+    "html",
+    "pdf",
+    "documentation",
+    "electron",
+    "claude",
+    "claude-code",
+    "doc-browser",
+    "local-first"
+  ],
   "main": "electron-main.js",
   "bin": {
-    "mdown": "./serve.js"
+    "clawdoc": "./serve.js"
   },
   "scripts": {
     "start": "electron-forge start",

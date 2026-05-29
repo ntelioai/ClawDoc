@@ -1,6 +1,6 @@
 #!/usr/bin/env node
-// mdown local server — serves the UI and proxies workspace file reads.
-// Run: node Utils/mdown/serve.js
+// ClawDoc local server — serves the UI and proxies workspace file reads.
+// Run: node serve.js
 
 const http = require('http');
 const fs = require('fs');
@@ -16,9 +16,9 @@ const github = require('./github');
 const SCRIPT_DIR = __dirname;
 const APP_DIR = path.join(SCRIPT_DIR, 'app');
 // Writable data directory — overridable so packaged apps can redirect to userData.
-const DATA_DIR = process.env.MDOWN_DATA_DIR || SCRIPT_DIR;
+const DATA_DIR = process.env.CLAWDOC_DATA_DIR || SCRIPT_DIR;
 const INDEX_PATH = path.join(DATA_DIR, 'index.json');
-const PORT = Number(process.env.MDOWN_PORT || 7878);
+const PORT = Number(process.env.CLAWDOC_PORT || 7878);
 
 const SETTINGS_PATH = path.join(DATA_DIR, 'settings.json');
 
@@ -102,7 +102,7 @@ function setGithubToken(token, profile) {
 // Determine the initial workspace list using this priority:
 //   1. CLI -p flags win for this session (don't overwrite settings.json)
 //   2. settings.json if it exists
-//   3. MDOWN_ROOT env or process.cwd() as the final default (and persist it)
+//   3. CLAWDOC_ROOT env or process.cwd() as the final default (and persist it)
 function resolveInitialRootPaths() {
   const cli = parseCliRootPaths(process.argv);
   const settings = loadSettingsFile();
@@ -115,7 +115,7 @@ function resolveInitialRootPaths() {
     return cli;
   }
   if (settings) return settings.workspaces.map(w => path.resolve(typeof w === 'string' ? w : w.path));
-  const def = [path.resolve(process.env.MDOWN_ROOT || process.cwd())];
+  const def = [path.resolve(process.env.CLAWDOC_ROOT || process.cwd())];
   try { saveSettingsFile({ ...readSettings(), workspaces: def }); } catch {}
   return def;
 }
@@ -477,7 +477,7 @@ function handleSave(req, res, query) {
     const body = Buffer.concat(chunks).toString('utf8');
     try {
       // Write atomically: temp file in the same dir + rename.
-      const tmp = fp + '.mdown-tmp-' + process.pid + '-' + Date.now();
+      const tmp = fp + '.clawdoc-tmp-' + process.pid + '-' + Date.now();
       fs.writeFileSync(tmp, body, 'utf8');
       fs.renameSync(tmp, fp);
       const stat = fs.statSync(fp);
@@ -848,9 +848,9 @@ async function handleTouch(res, body) {
     content = `# ${title}\n\n`;
   }
   try {
-    // Atomic create: write to .mdown-tmp-* then rename. Matches the editor's
+    // Atomic create: write to .clawdoc-tmp-* then rename. Matches the editor's
     // save path so chokidar's ignore filter still catches the temp.
-    const tmp = destFp + '.mdown-tmp-' + process.pid + '-' + Date.now();
+    const tmp = destFp + '.clawdoc-tmp-' + process.pid + '-' + Date.now();
     fs.writeFileSync(tmp, content, { encoding: 'utf8', flag: 'wx' });
     fs.renameSync(tmp, destFp);
     const rel = path.relative(r.root.path, destFp).split(path.sep).join('/');
@@ -910,9 +910,9 @@ function handleEventsStream(req, res) {
   res.on('close', cleanup);
 }
 
-// Skip events for files mdown itself touches, dotfiles/build artifacts that
+// Skip events for files ClawDoc itself touches, dotfiles/build artifacts that
 // can never be in the index, and the indexer's own output. Mirrors the spirit
-// of .mdownignore without re-parsing it (chokidar's `ignored` runs per event,
+// of .clawdocignore without re-parsing it (chokidar's `ignored` runs per event,
 // so this stays hot).
 function shouldIgnoreEvent(absPath) {
   const base = path.basename(absPath);
@@ -921,7 +921,7 @@ function shouldIgnoreEvent(absPath) {
   // our atomic save would otherwise fire a noisy add+unlink burst.
   if (base === 'index.json' || base === 'settings.json') return true;
   if (base.startsWith('.') && base !== '.') return true;     // dotfiles
-  if (base.includes('.mdown-tmp-')) return true;             // our own atomic-write tmp
+  if (base.includes('.clawdoc-tmp-')) return true;             // our own atomic-write tmp
   if (base === 'node_modules' || base === '.git') return true;
   if (base === '__pycache__' || base.endsWith('.pyc')) return true;
   return false;
@@ -991,7 +991,7 @@ function startWatchers() {
       const p = workspacePrefixedPath(root.name, root.path, absPath);
       if (p) pendingChangedPaths.add(p);
       scheduleReindex();
-      // Also nudge auto-commit for filesystem edits made outside mdown
+      // Also nudge auto-commit for filesystem edits made outside ClawDoc
       // (Claude writes, an external editor, etc).
       const rel = path.relative(root.path, absPath).split(path.sep).join('/');
       if (rel && !rel.startsWith('..')) {
@@ -1006,7 +1006,7 @@ function startWatchers() {
     watcher.on('error', (err) => {
       // Don't crash — log and keep going. A single watcher dying shouldn't
       // take down the server.
-      console.error(`mdown watcher error (${root.name}):`, err && err.message || err);
+      console.error(`clawdoc watcher error (${root.name}):`, err && err.message || err);
     });
 
     watchers.push(watcher);
@@ -1139,12 +1139,12 @@ async function attachTerminal(ws, query) {
       // initializing silently — accept it.
       setTimeout(() => resolve({ ok: true, buf, exited: null }), 150);
       // We don't dispose dataSub/exitSub here — they're forwarded below when ok.
-      trial._mdownSubs = { dataSub, exitSub };
+      trial._clawdocSubs = { dataSub, exitSub };
     });
     if (!decided.ok) {
       console.log(`[terminal] probe ${bin}: exec failed (exit=${decided.exited && decided.exited.exitCode} in <150ms, 0b)`);
       lastErr = new Error(`exec failed for "${bin}" (exit ${decided.exited && decided.exited.exitCode})`);
-      try { trial._mdownSubs.dataSub.dispose(); trial._mdownSubs.exitSub.dispose(); } catch {}
+      try { trial._clawdocSubs.dataSub.dispose(); trial._clawdocSubs.exitSub.dispose(); } catch {}
       try { trial.kill(); } catch {}
       continue;
     }
@@ -1152,7 +1152,7 @@ async function attachTerminal(ws, query) {
     chosenBin = bin;
     bufferedOut = decided.buf;
     // Tear down the probe listeners; the main handlers below take over.
-    try { trial._mdownSubs.dataSub.dispose(); trial._mdownSubs.exitSub.dispose(); } catch {}
+    try { trial._clawdocSubs.dataSub.dispose(); trial._clawdocSubs.exitSub.dispose(); } catch {}
     break;
   }
   console.log(`[terminal] spawn bin=${chosenBin || '(none)'} cwd=${cwd} cols=${cols} rows=${rows} tried=${candidates.length} probe_bytes=${bufferedOut.length}`);
@@ -1280,7 +1280,7 @@ async function handleGitCommit(res, body) {
   const root = requireWorkspaceByName(body.workspace);
   if (!root) return sendJson(res, 404, { error: 'unknown workspace' });
   try {
-    const r = await gitOps.commitAll(root.path, body.message || 'Update from mdown');
+    const r = await gitOps.commitAll(root.path, body.message || 'Update from ClawDoc');
     if (!r) return sendJson(res, 200, { ok: true, noop: true });
     broadcastEvent('git-changed', { workspace: root.name, sha: r.sha });
     sendJson(res, 200, { ok: true, sha: r.sha, staged: r.staged });
@@ -1400,7 +1400,7 @@ function handleGithubDisconnect(res) {
 
 function handleGithubDeviceStart(res) {
   if (!github.deviceFlowAvailable()) {
-    return sendJson(res, 400, { error: 'device flow disabled (set MDOWN_GITHUB_CLIENT_ID)' });
+    return sendJson(res, 400, { error: 'device flow disabled (set CLAWDOC_GITHUB_CLIENT_ID)' });
   }
   try {
     const s = github.startDeviceFlow();
@@ -1480,8 +1480,8 @@ async function runAutoCommit(rootName) {
   const files = Array.from(autoCommitPending.get(rootName) || []);
   autoCommitPending.delete(rootName);
   const msg = files.length === 1
-    ? `mdown: edit ${files[0]}`
-    : `mdown: edit ${files.length} files`;
+    ? `clawdoc: edit ${files[0]}`
+    : `clawdoc: edit ${files.length} files`;
   try {
     const r = await gitOps.commitAll(root.path, msg);
     if (!r) return;
@@ -1501,7 +1501,7 @@ async function runAutoCommit(rootName) {
 }
 
 server.listen(PORT, '127.0.0.1', () => {
-  console.log(`mdown: http://127.0.0.1:${PORT}/`);
+  console.log(`clawdoc: http://127.0.0.1:${PORT}/`);
   for (const r of ROOTS) console.log(`       workspace: ${r.name}  →  ${r.path}`);
   if (!fs.existsSync(INDEX_PATH)) {
     console.log(`       no index found — click "Reindex" in the UI or run: node ${path.relative(process.cwd(), path.join(SCRIPT_DIR, 'index.js'))}`);

@@ -1,9 +1,45 @@
+# Dependencies
 node_modules/
+
+# Build / packaging output
 out/
+dist/
+build-output/
+coverage/
+
+# ClawDoc runtime artifacts (generated in cwd during dev; in userData when packaged)
 index.json
 settings.json
-mdown.log
-.DS_Store
+clawdoc.log
+.clawdoc-tmp-*
+
+# Logs
 *.log
+logs/
+
+# Editor scratch / swap files
+*.tmp
+*.bak
+*.swp
+*.swo
+
+# OS noise
+.DS_Store
+Thumbs.db
+
+# IDE / editor config (not enforced project-wide)
+.idea/
+.vscode/
+*.iml
+
+# Process artifacts
+*.pid
+*.seed
+
+# Secrets / env
 .env
 .env.local
+.env.*.local
+
+# Local Claude Code state
+.claude/

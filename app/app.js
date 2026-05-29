@@ -1,4 +1,4 @@
-/* mdown — browser app */
+/* ClawDoc — browser app */
 (function () {
   'use strict';
 
@@ -11,11 +11,11 @@
     expanded: new Set(),   // expanded folder paths
     currentDoc: null,
     currentFolder: '',
-    sortBy: localStorage.getItem('mdown.sortBy') || 'date',
-    sortDir: localStorage.getItem('mdown.sortDir') || 'desc',
+    sortBy: localStorage.getItem('clawdoc.sortBy') || 'date',
+    sortDir: localStorage.getItem('clawdoc.sortDir') || 'desc',
     treeFilter: '',
-    treeShowFilenames: localStorage.getItem('mdown.treeShowFilenames') === '1',
-    mcMode: localStorage.getItem('mdown.mcMode') === '1',
+    treeShowFilenames: localStorage.getItem('clawdoc.treeShowFilenames') === '1',
+    mcMode: localStorage.getItem('clawdoc.mcMode') === '1',
     // Per-pane state for the two-pane file manager. Persisted across reloads
     // so the user comes back to the same expanded folders, focused file, and
     // filter string. lastFocused tracks which pane spacebar-preview should
@@ -23,7 +23,7 @@
     mcPanes: (() => {
       const empty = () => ({ expanded: new Set(['']), focused: '', filter: '' });
       try {
-        const raw = localStorage.getItem('mdown.mcPanes');
+        const raw = localStorage.getItem('clawdoc.mcPanes');
         if (raw) {
           const p = JSON.parse(raw);
           return {
@@ -42,7 +42,7 @@
       } catch {}
       return { a: empty(), b: empty() };
     })(),
-    mcLastFocusedPane: localStorage.getItem('mdown.mcLastFocusedPane') === 'b' ? 'b' : 'a',
+    mcLastFocusedPane: localStorage.getItem('clawdoc.mcLastFocusedPane') === 'b' ? 'b' : 'a',
   };
 
   // ---------- tabs + persisted ui state ----------
@@ -90,7 +90,7 @@
     if (state.isEmbed || state.suppressPersist) return;
     syncStateToActiveTab();
     try {
-      localStorage.setItem('mdown.tabs', JSON.stringify({
+      localStorage.setItem('clawdoc.tabs', JSON.stringify({
         tabs: state.tabs.map(t => ({
           id: t.id, docPath: t.docPath, folder: t.folder, expanded: t.expanded,
         })),
@@ -102,7 +102,7 @@
   function loadPersistedTabs() {
     // New format
     try {
-      const raw = localStorage.getItem('mdown.tabs');
+      const raw = localStorage.getItem('clawdoc.tabs');
       if (raw) {
         const obj = JSON.parse(raw);
         if (obj && Array.isArray(obj.tabs) && obj.tabs.length) {
@@ -113,15 +113,7 @@
         }
       }
     } catch {}
-    // Legacy migration from previous mdown.expanded / mdown.location keys
-    let legacyExpanded = null, legacyLoc = null;
-    try { legacyExpanded = JSON.parse(localStorage.getItem('mdown.expanded') || 'null'); } catch {}
-    try { legacyLoc = JSON.parse(localStorage.getItem('mdown.location') || 'null'); } catch {}
-    const t = makeTab({
-      docPath: legacyLoc && legacyLoc.kind === 'doc' ? legacyLoc.path : null,
-      folder: legacyLoc && legacyLoc.kind === 'folder' ? legacyLoc.path : '',
-      expanded: Array.isArray(legacyExpanded) ? legacyExpanded : [''],
-    });
+    const t = makeTab({ expanded: [''] });
     return { tabs: [t], activeId: t.id };
   }
 
@@ -527,7 +519,7 @@
 
   function toggleTreeDisplay() {
     state.treeShowFilenames = !state.treeShowFilenames;
-    try { localStorage.setItem('mdown.treeShowFilenames', state.treeShowFilenames ? '1' : '0'); } catch {}
+    try { localStorage.setItem('clawdoc.treeShowFilenames', state.treeShowFilenames ? '1' : '0'); } catch {}
     applyTreeDisplayMode();
     renderTree();
   }
@@ -607,8 +599,8 @@
     if (location.hash === h) return;
     // First navigation on an empty hash replaces; subsequent ones push so the
     // browser back/forward buttons walk the navigation stack.
-    if (!location.hash) history.replaceState({ mdown: true }, '', location.pathname + h);
-    else history.pushState({ mdown: true }, '', location.pathname + h);
+    if (!location.hash) history.replaceState({ clawdoc: true }, '', location.pathname + h);
+    else history.pushState({ clawdoc: true }, '', location.pathname + h);
   }
 
   function applyHash() {
@@ -637,7 +629,7 @@
       const params = new URLSearchParams(h);
       if (params.has('doc') && state.docsByPath.has(params.get('doc'))) {
         renderDoc(state.docsByPath.get(params.get('doc')), params.get('a') || '');
-        document.title = state.docsByPath.get(params.get('doc')).title || 'mdown';
+        document.title = state.docsByPath.get(params.get('doc')).title || 'ClawDoc';
       } else {
         renderEmpty('No document specified.');
       }
@@ -791,7 +783,7 @@
     });
     sortSelect.addEventListener('change', () => {
       state.sortBy = sortSelect.value;
-      localStorage.setItem('mdown.sortBy', state.sortBy);
+      localStorage.setItem('clawdoc.sortBy', state.sortBy);
       renderFolder(folderPath);
     });
     sortCtl.appendChild(sortSelect);
@@ -799,7 +791,7 @@
     dirBtn.style.cssText = 'height:26px;width:26px;border:1px solid var(--border-strong);border-radius:4px;background:var(--bg-elev);cursor:pointer;';
     dirBtn.addEventListener('click', () => {
       state.sortDir = state.sortDir === 'asc' ? 'desc' : 'asc';
-      localStorage.setItem('mdown.sortDir', state.sortDir);
+      localStorage.setItem('clawdoc.sortDir', state.sortDir);
       renderFolder(folderPath);
     });
     sortCtl.appendChild(dirBtn);
@@ -1489,7 +1481,7 @@
       wsSection.appendChild(saveRow);
     } else {
       wsSection.appendChild(el('div', { class: 'settings-help' },
-        'Workspaces persist to settings.json next to the mdown scripts. The Reindex button and the index.js CLI both read it.'
+        'Workspaces persist to settings.json next to the ClawDoc scripts. The Reindex button and the index.js CLI both read it.'
       ));
     }
     body.appendChild(wsSection);
@@ -1536,27 +1528,27 @@
       row.appendChild(b);
       return row;
     };
-    resetList.appendChild(resetRow('mdown.tabs', 'Tabs & open docs',
+    resetList.appendChild(resetRow('clawdoc.tabs', 'Tabs & open docs',
       () => state.tabs.length + ' tabs'));
-    resetList.appendChild(resetRow('mdown.zoom', 'Zoom level',
+    resetList.appendChild(resetRow('clawdoc.zoom', 'Zoom level',
       () => Math.round(state.zoom * 100) + '%'));
-    resetList.appendChild(resetRow('mdown.sidebarWidth', 'Sidebar width',
-      () => (localStorage.getItem('mdown.sidebarWidth') || 'default') + 'px'));
-    resetList.appendChild(resetRow('mdown.sortBy', 'Sort by',
+    resetList.appendChild(resetRow('clawdoc.sidebarWidth', 'Sidebar width',
+      () => (localStorage.getItem('clawdoc.sidebarWidth') || 'default') + 'px'));
+    resetList.appendChild(resetRow('clawdoc.sortBy', 'Sort by',
       () => state.sortBy));
-    resetList.appendChild(resetRow('mdown.sortDir', 'Sort direction',
+    resetList.appendChild(resetRow('clawdoc.sortDir', 'Sort direction',
       () => state.sortDir));
     resetSection.appendChild(resetList);
 
     const clearAllRow = el('div', { class: 'settings-row' });
     clearAllRow.appendChild(el('span', { class: 'sr-key' }, 'Reset everything'));
-    clearAllRow.appendChild(el('span', { class: 'sr-val' }, 'Clears all mdown.* keys and reloads'));
+    clearAllRow.appendChild(el('span', { class: 'sr-val' }, 'Clears all clawdoc.* keys and reloads'));
     const allBtn = el('button', { class: 'danger' }, 'Reset & reload');
     allBtn.addEventListener('click', () => {
       if (!confirm('Reset all saved preferences (tabs, zoom, sidebar, sort) and reload?')) return;
       for (let i = localStorage.length - 1; i >= 0; i--) {
         const k = localStorage.key(i);
-        if (k && k.startsWith('mdown.')) localStorage.removeItem(k);
+        if (k && k.startsWith('clawdoc.')) localStorage.removeItem(k);
       }
       location.reload();
     });
@@ -1566,7 +1558,7 @@
   }
 
   // ---------- zoom ----------
-  state.zoom = parseFloat(localStorage.getItem('mdown.zoom')) || 1;
+  state.zoom = parseFloat(localStorage.getItem('clawdoc.zoom')) || 1;
 
   function applyZoom() {
     const v = $('#viewer');
@@ -1576,7 +1568,7 @@
   }
   function setZoom(z) {
     state.zoom = Math.max(0.5, Math.min(3, Math.round(z * 100) / 100));
-    localStorage.setItem('mdown.zoom', String(state.zoom));
+    localStorage.setItem('clawdoc.zoom', String(state.zoom));
     applyZoom();
   }
   function zoomIn()    { setZoom(state.zoom + 0.1); }
@@ -1805,7 +1797,7 @@
       brightCyan:    '#93a1a1', brightWhite:   '#fdf6e3',
     },
   };
-  const TERM_THEME_KEY = 'mdown:termTheme';
+  const TERM_THEME_KEY = 'clawdoc:termTheme';
 
   const chat = {
     open: false,
@@ -2105,25 +2097,25 @@
       es.addEventListener('index-changed', (ev) => handleIndexChanged(ev));
       es.addEventListener('index-error', (ev) => {
         let data; try { data = JSON.parse(ev.data); } catch {}
-        console.warn('mdown: reindex failed', data);
+        console.warn('clawdoc: reindex failed', data);
       });
       es.addEventListener('git-changed', () => { gh.refresh(); });
       es.addEventListener('git-pushed',  () => { gh.refresh(); });
       es.addEventListener('git-error', (ev) => {
         let data; try { data = JSON.parse(ev.data); } catch {}
-        console.warn('mdown: git error', data);
+        console.warn('clawdoc: git error', data);
         gh.refresh();
       });
       es.onerror = () => {
         // EventSource auto-reconnects, but a fast retry loop spams the server
-        // if the route disappears (e.g. user upgraded mdown). Back off.
+        // if the route disappears (e.g. user upgraded ClawDoc). Back off.
         try { es.close(); } catch {}
         live.es = null;
         live.retryMs = Math.min(live.retryMs * 2, 30000);
         setTimeout(connectLiveEvents, live.retryMs);
       };
     } catch (err) {
-      console.warn('mdown: live updates unavailable', err);
+      console.warn('clawdoc: live updates unavailable', err);
     }
   }
 
@@ -2144,7 +2136,7 @@
     try {
       await loadIndex({ silent: true });
     } catch (err) {
-      console.warn('mdown: silent reindex load failed', err);
+      console.warn('clawdoc: silent reindex load failed', err);
       live.refreshing = false;
       return;
     }
@@ -2263,7 +2255,7 @@
 
   function persistMcPanes() {
     try {
-      localStorage.setItem('mdown.mcPanes', JSON.stringify({
+      localStorage.setItem('clawdoc.mcPanes', JSON.stringify({
         a: {
           expanded: Array.from(state.mcPanes.a.expanded),
           focused: state.mcPanes.a.focused || '',
@@ -2275,7 +2267,7 @@
           filter:  state.mcPanes.b.filter || '',
         },
       }));
-      localStorage.setItem('mdown.mcLastFocusedPane', state.mcLastFocusedPane || 'a');
+      localStorage.setItem('clawdoc.mcLastFocusedPane', state.mcLastFocusedPane || 'a');
     } catch {}
   }
 
@@ -2298,12 +2290,12 @@
 
   function enterMcMode() {
     state.mcMode = true;
-    try { localStorage.setItem('mdown.mcMode', '1'); } catch {}
+    try { localStorage.setItem('clawdoc.mcMode', '1'); } catch {}
     applyMcMode();
   }
   function exitMcMode() {
     state.mcMode = false;
-    try { localStorage.setItem('mdown.mcMode', '0'); } catch {}
+    try { localStorage.setItem('clawdoc.mcMode', '0'); } catch {}
     applyMcMode();
   }
   function toggleMcMode() { state.mcMode ? exitMcMode() : enterMcMode(); }
@@ -2487,7 +2479,7 @@
     row.addEventListener('dragstart', (ev) => {
       mcDragPath = prefixedPath;
       ev.dataTransfer.effectAllowed = 'move';
-      try { ev.dataTransfer.setData('text/x-mdown-path', prefixedPath); } catch {}
+      try { ev.dataTransfer.setData('text/x-clawdoc-path', prefixedPath); } catch {}
       // Plain-text fallback for browsers that don't accept the custom type.
       try { ev.dataTransfer.setData('text/plain', prefixedPath); } catch {}
       row.classList.add('mc-dragging');
@@ -2544,7 +2536,7 @@
       ev.preventDefault();
       ev.stopPropagation();
       const src = mcDragPath
-        || ev.dataTransfer.getData('text/x-mdown-path')
+        || ev.dataTransfer.getData('text/x-clawdoc-path')
         || ev.dataTransfer.getData('text/plain');
       if (!src) return;
       if (destFolderPath !== '' && !mcDropAcceptable(src, destFolderPath)) return;
@@ -3258,7 +3250,7 @@
   }
 
   function initSidebarResize() {
-    const stored = parseInt(localStorage.getItem('mdown.sidebarWidth'), 10);
+    const stored = parseInt(localStorage.getItem('clawdoc.sidebarWidth'), 10);
     if (stored && !Number.isNaN(stored)) applySidebarWidth(stored);
 
     const resizer = $('#sidebar-resizer');
@@ -3274,7 +3266,7 @@
       resizer.classList.remove('dragging');
       document.body.classList.remove('resizing-sidebar');
       const w = parseInt(sidebar.style.width, 10);
-      if (w) localStorage.setItem('mdown.sidebarWidth', String(w));
+      if (w) localStorage.setItem('clawdoc.sidebarWidth', String(w));
     };
 
     resizer.addEventListener('pointerdown', (ev) => {
@@ -3300,7 +3292,7 @@
 
     resizer.addEventListener('dblclick', () => {
       applySidebarWidth(SIDEBAR_DEFAULT);
-      localStorage.setItem('mdown.sidebarWidth', String(SIDEBAR_DEFAULT));
+      localStorage.setItem('clawdoc.sidebarWidth', String(SIDEBAR_DEFAULT));
     });
   }
 
@@ -3724,7 +3716,7 @@
     try {
       const r = await fetch('/api/git/commit', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ workspace: wsName, message: 'mdown: manual commit' }),
+        body: JSON.stringify({ workspace: wsName, message: 'clawdoc: manual commit' }),
       });
       if (!r.ok) {
         const j = await r.json().catch(() => ({}));
@@ -3777,7 +3769,7 @@
     try {
       const r = await fetch('/api/github/repo/create', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name, private: isPriv, description: 'mdown workspace: ' + root.name }),
+        body: JSON.stringify({ name, private: isPriv, description: 'ClawDoc workspace: ' + root.name }),
       });
       const j = await r.json();
       if (!r.ok || !j.ok) throw new Error(j.error || ('HTTP ' + r.status));

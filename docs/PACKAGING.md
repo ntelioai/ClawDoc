@@ -1,6 +1,6 @@
-# Packaging mdown as a desktop app
+# Packaging ClawDoc as a desktop app
 
-mdown ships as a Node HTTP server + WebSocket PTY bridge + a static frontend. The desktop build wraps all of that in [Electron Forge](https://www.electronforge.io/), producing a standalone `.app` (macOS), `Setup.exe` (Windows), or `.deb` / `.rpm` (Linux) that includes Node, Chromium, every npm dep, and the `node-pty` native binding. End users get one downloadable file with no Node or browser dependency.
+ClawDoc ships as a Node HTTP server + WebSocket PTY bridge + a static frontend. The desktop build wraps all of that in [Electron Forge](https://www.electronforge.io/), producing a standalone `.app` (macOS), `Setup.exe` (Windows), or `.deb` / `.rpm` (Linux) that includes Node, Chromium, every npm dep, and the `node-pty` native binding. End users get one downloadable file with no Node or browser dependency.
 
 This document covers:
 
@@ -15,7 +15,7 @@ This document covers:
 
 ## 1. Architecture
 
-mdown's core (`serve.js`, `index.js`, `git.js`, `github.js`, `app/`) is unmodified Node + a static browser UI. The packaging layer adds two files:
+ClawDoc's core (`serve.js`, `index.js`, `git.js`, `github.js`, `app/`) is unmodified Node + a static browser UI. The packaging layer adds two files:
 
 | File | Role |
 |---|---|
@@ -24,13 +24,13 @@ mdown's core (`serve.js`, `index.js`, `git.js`, `github.js`, `app/`) is unmodifi
 
 **Why in-process?** Loading `serve.js` with `require()` from the Electron main process means the server starts inside the same Node runtime — no child Node binary needed, no IPC, no port file. The server's `server.listen(PORT, ...)` runs at module load time, so `electron-main.js` simply requires it, polls the port until it accepts connections, then opens a window.
 
-**Why a free port?** A hardcoded port (the dev default is 7878) collides if the user already has a dev `mdown` running. `electron-main.js` calls `net.createServer().listen(0)` at boot to claim a free port, then sets `MDOWN_PORT` in `process.env` before requiring `serve.js`.
+**Why a free port?** A hardcoded port (the dev default is 7878) collides if the user already has a dev ClawDoc instance running. `electron-main.js` calls `net.createServer().listen(0)` at boot to claim a free port, then sets `CLAWDOC_PORT` in `process.env` before requiring `serve.js`.
 
-**Writable state.** `serve.js` and `index.js` read `MDOWN_DATA_DIR` and place `settings.json`, `index.json`, and `mdown.log` there. In dev mode the var is unset and they live next to the script (existing behavior); in the packaged app, `electron-main.js` sets it to `app.getPath('userData')`:
+**Writable state.** `serve.js` and `index.js` read `CLAWDOC_DATA_DIR` and place `settings.json`, `index.json`, and `clawdoc.log` there. In dev mode the var is unset and they live next to the script (existing behavior); in the packaged app, `electron-main.js` sets it to `app.getPath('userData')`:
 
-- macOS: `~/Library/Application Support/mdown/`
-- Linux: `~/.config/mdown/`
-- Windows: `%APPDATA%\mdown\`
+- macOS: `~/Library/Application Support/ClawDoc/`
+- Linux: `~/.config/ClawDoc/`
+- Windows: `%APPDATA%\ClawDoc\`
 
 **Native modules.** `node-pty` is a native module — it has to be rebuilt against Electron's Node ABI (different from system Node). Two things make this work automatically:
 
@@ -44,7 +44,7 @@ mdown's core (`serve.js`, `index.js`, `git.js`, `github.js`, `app/`) is unmodifi
 ## 2. Local development
 
 ```bash
-cd Utils/mdown
+cd .
 npm install         # one-time; installs Electron, Forge, native rebuilds
 npm start           # equivalent to: electron-forge start
 ```
@@ -53,7 +53,7 @@ npm start           # equivalent to: electron-forge start
 
 1. Runs `@electron/rebuild` against the current Electron ABI (idempotent if already built).
 2. Spawns Electron with `electron-main.js` as the entry.
-3. On first launch (no `settings.json` in userData and no `MDOWN_ROOT` env), shows a folder picker for the workspace.
+3. On first launch (no `settings.json` in userData and no `CLAWDOC_ROOT` env), shows a folder picker for the workspace.
 4. Boots `serve.js` and opens a window.
 
 Subsequent launches read the persisted workspace from `settings.json` and skip the picker.
@@ -61,19 +61,19 @@ Subsequent launches read the persisted workspace from `settings.json` and skip t
 To target a specific workspace without a picker:
 
 ```bash
-MDOWN_ROOT=/Volumes/dev/Business npm start
+CLAWDOC_ROOT=/Volumes/dev/Business npm start
 ```
 
 To target a specific port (otherwise a free one is picked):
 
 ```bash
-MDOWN_PORT=7879 npm start
+CLAWDOC_PORT=7879 npm start
 ```
 
 To reset state during development:
 
 ```bash
-rm -rf ~/Library/Application\ Support/mdown   # macOS
+rm -rf ~/Library/Application\ Support/ClawDoc   # macOS
 ```
 
 ---
@@ -90,10 +90,10 @@ Two commands:
 On macOS arm64 today `npm run make` produces:
 
 ```
-out/make/zip/darwin/arm64/mdown-darwin-arm64-0.2.0.zip
+out/make/zip/darwin/arm64/clawdoc-darwin-arm64-0.2.0.zip
 ```
 
-~128 MB. The zip contains `mdown.app`, which contains Electron (~150 MB uncompressed) + your code.
+~128 MB. The zip contains `ClawDoc.app`, which contains Electron (~150 MB uncompressed) + your code.
 
 ### Application icon
 
@@ -112,11 +112,11 @@ The maker configs reference the same files where they need explicit paths (Squir
 **Regenerating the icons** after editing the source PNG:
 
 ```bash
-cd Utils/mdown
+cd .
 SRC=app/assets/ntelio-square-logo-512.png
 
 # macOS .icns — uses iconutil (built into macOS)
-ICONSET=/tmp/mdown.iconset
+ICONSET=/tmp/ClawDoc.iconset
 rm -rf $ICONSET && mkdir -p $ICONSET
 sips -z 16 16   "$SRC" --out $ICONSET/icon_16x16.png       >/dev/null
 sips -z 32 32   "$SRC" --out $ICONSET/icon_16x16@2x.png    >/dev/null
@@ -155,7 +155,7 @@ The three files in `build/` should be committed so CI builds don't need to regen
 ignore: [
   /^\/index\.json$/,        // regenerated on first launch
   /^\/settings\.json$/,     // user-specific, lives in userData
-  /^\/\.mdownignore$/,      // dev-only convenience
+  /^\/\.clawdocignore$/,      // dev-only convenience
   /^\/REQUIREMENTS\.md$/,
   /^\/README\.md$/,
   /^\/out($|\/)/,           // previous build output
@@ -189,7 +189,7 @@ jobs:
     runs-on: ${{ matrix.os }}
     defaults:
       run:
-        working-directory: Utils/mdown
+        working-directory: .
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -202,15 +202,15 @@ jobs:
       - run: npm run make
       - uses: actions/upload-artifact@v4
         with:
-          name: mdown-${{ matrix.os }}
-          path: Utils/mdown/out/make/**/*
+          name: clawdoc-${{ matrix.os }}
+          path: out/make/**/*
 ```
 
 Per platform:
 
 | Runner | Maker(s) | Artifact | System deps |
 |---|---|---|---|
-| `macos-latest` | `@electron-forge/maker-zip` | `.zip` containing `mdown.app` | none (Xcode tools already present) |
+| `macos-latest` | `@electron-forge/maker-zip` | `.zip` containing `ClawDoc.app` | none (Xcode tools already present) |
 | `ubuntu-latest` | `@electron-forge/maker-deb`, `@electron-forge/maker-rpm` | `.deb` and `.rpm` | `fakeroot`, `dpkg`, `rpm` |
 | `windows-latest` | `@electron-forge/maker-squirrel` | `Setup.exe` (Squirrel.Windows installer) | none (Mono is no longer required for Squirrel on Windows) |
 
@@ -298,7 +298,7 @@ A code-signing certificate (EV recommended to avoid SmartScreen warnings on day 
 {
   name: '@electron-forge/maker-squirrel',
   config: {
-    name: 'mdown',
+    name: 'clawdoc',
     certificateFile: process.env.WINDOWS_CERT_PATH,
     certificatePassword: process.env.WINDOWS_CERT_PASSWORD,
   },
@@ -326,7 +326,7 @@ If this env var is set in your shell (which happens if you've debugged Electron'
 Symptoms:
 - `npm start` returns instantly, no window
 - The packaged `.app` opens for a fraction of a second and disappears
-- `~/Library/Application Support/mdown/mdown.log` is never created
+- `~/Library/Application Support/ClawDoc/clawdoc.log` is never created
 
 Fix:
 
@@ -367,12 +367,12 @@ Same gotcha applies to any other native module that ships an auxiliary binary (e
 
 ### Ad-hoc signed apps don't survive transit
 
-The unsigned/ad-hoc `.app` produced by a vanilla `npm run make` will run on the build machine, but if you zip it, send it to someone, they unzip and double-click — macOS marks the unzipped bundle as quarantined and Gatekeeper refuses to launch it (no error dialog on some macOS versions; some show "mdown is damaged and can't be opened").
+The unsigned/ad-hoc `.app` produced by a vanilla `npm run make` will run on the build machine, but if you zip it, send it to someone, they unzip and double-click — macOS marks the unzipped bundle as quarantined and Gatekeeper refuses to launch it (no error dialog on some macOS versions; some show "ClawDoc is damaged and can't be opened").
 
 Workarounds for testing only:
 
 ```bash
-xattr -dr com.apple.quarantine /Applications/mdown.app   # the recipient runs this
+xattr -dr com.apple.quarantine /Applications/ClawDoc.app   # the recipient runs this
 ```
 
 Or right-click → Open → Open Anyway in System Settings → Privacy & Security.
@@ -407,11 +407,11 @@ The UI loads `marked`, `xterm.js`, and the toast-ui editor from jsDelivr at runt
 2. Copy them into `app/vendor/`
 3. Update the `<script>` tags in `app/index.html`
 
-Not currently done because mdown was designed as an online-by-default local tool.
+Not currently done because ClawDoc was designed as an online-by-default local tool.
 
 ### macOS userData survives uninstall
 
-Deleting `mdown.app` doesn't remove `~/Library/Application Support/mdown/`. If you ship a major schema change to `settings.json`, either version-check on load or document a `rm -rf ~/Library/Application\ Support/mdown` step for users.
+Deleting `ClawDoc.app` doesn't remove `~/Library/Application Support/ClawDoc/`. If you ship a major schema change to `settings.json`, either version-check on load or document a `rm -rf ~/Library/Application\ Support/ClawDoc` step for users.
 
 ### Bundle size
 
@@ -443,14 +443,14 @@ npm run package           # raw .app/.exe
 npm run make              # installer/zip
 
 # clean userData (macOS)
-rm -rf ~/Library/Application\ Support/mdown
+rm -rf ~/Library/Application\ Support/ClawDoc
 
 # verify packaged app launched
-tail -f ~/Library/Application\ Support/mdown/mdown.log
+tail -f ~/Library/Application\ Support/ClawDoc/clawdoc.log
 
 # reset native modules after Electron upgrade
 ./node_modules/.bin/electron-rebuild
 
 # inspect a built bundle's signature
-codesign -dv --verbose=4 out/mdown-darwin-arm64/mdown.app
+codesign -dv --verbose=4 out/clawdoc-darwin-arm64/ClawDoc.app
 ```

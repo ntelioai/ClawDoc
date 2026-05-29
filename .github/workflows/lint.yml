@@ -1,0 +1,44 @@
+name: Lint
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  lint:
+    name: Syntax check
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          # No package-lock-based cache here: this job intentionally skips
+          # `npm ci` so it doesn't have to build node-pty native bindings.
+          # It only runs `node --check` over JS sources.
+
+      - name: Syntax-check JS sources
+        # Catches the parse-level errors a typo would introduce. Doesn't run
+        # any code, doesn't need node_modules, finishes in seconds.
+        run: |
+          set -e
+          for f in electron-main.js serve.js index.js git.js github.js forge.config.js app/app.js; do
+            echo "node --check $f"
+            node --check "$f"
+          done
+
+      - name: Validate package.json
+        run: node -e "JSON.parse(require('fs').readFileSync('package.json', 'utf8'))"
+
+      - name: Validate forge.config.js loads
+        # Forge expects @electron-forge/cli on the path for some makers; we
+        # only verify the file evaluates and exports an object.
+        run: node -e "const c = require('./forge.config.js'); if (typeof c !== 'object') process.exit(1)"

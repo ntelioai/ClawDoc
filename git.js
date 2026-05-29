@@ -1,4 +1,4 @@
-// Git operations for mdown workspaces.
+// Git operations for ClawDoc workspaces.
 //
 // Wraps isomorphic-git so we can ship Git inside the .app without requiring
 // the user to install git(1). All operations are scoped to a single workspace
@@ -10,7 +10,7 @@ const git = require('isomorphic-git');
 const http = require('isomorphic-git/http/node');
 const { diffLines, createTwoFilesPatch } = require('diff');
 
-const DEFAULT_AUTHOR = { name: 'mdown', email: 'mdown@local' };
+const DEFAULT_AUTHOR = { name: 'clawdoc', email: 'clawdoc@local' };
 
 // `isomorphic-git` wants `{ fs, dir }` everywhere; this trims the boilerplate.
 const ctx = (dir) => ({ fs, dir });
@@ -98,14 +98,12 @@ async function init(dir, opts = {}) {
   ensureGitignore(dir);
 }
 
-// Default ignores so an mdown user doesn't accidentally commit transient files
-// from the workspace (.DS_Store, node_modules, the mdown index, etc).
+// Default ignores so a ClawDoc user doesn't accidentally commit transient files
+// from the workspace (.DS_Store, node_modules, ClawDoc's atomic-write temps, etc).
 const DEFAULT_GITIGNORE = [
   '.DS_Store',
   'node_modules/',
-  '.mdown-tmp-*',
-  'Utils/mdown/index.json',
-  'Utils/mdown/settings.json',
+  '.clawdoc-tmp-*',
 ].join('\n') + '\n';
 
 function ensureGitignore(dir) {

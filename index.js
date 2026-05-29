@@ -1,19 +1,19 @@
 #!/usr/bin/env node
-// mdown index generator — walks the workspace and produces index.json
-// Run: node Utils/mdown/index.js
+// ClawDoc index generator — walks the workspace and produces index.json
+// Run: node index.js
 
 const fs = require('fs');
 const path = require('path');
 
 const SCRIPT_DIR = __dirname;
 // Writable data directory — overridable so packaged apps can redirect to userData.
-const DATA_DIR = process.env.MDOWN_DATA_DIR || SCRIPT_DIR;
-// Index file stays alongside the mdown scripts, regardless of workspace.
+const DATA_DIR = process.env.CLAWDOC_DATA_DIR || SCRIPT_DIR;
+// Index file stays alongside the ClawDoc scripts, regardless of workspace.
 const INDEX_PATH = path.join(DATA_DIR, 'index.json');
 
 // Parse one or more -p / --path flags from argv. Returns absolute paths.
 // Falls back to settings.json (written by serve.js / the UI), then
-// MDOWN_ROOT, then process.cwd().
+// CLAWDOC_ROOT, then process.cwd().
 function parseRootPaths(argv) {
   const out = [];
   for (let i = 2; i < argv.length; i++) {
@@ -38,7 +38,7 @@ function parseRootPaths(argv) {
       }
     } catch {}
   }
-  return [path.resolve(process.env.MDOWN_ROOT || process.cwd())];
+  return [path.resolve(process.env.CLAWDOC_ROOT || process.cwd())];
 }
 
 // Assign a unique display name to each workspace, derived from basename.
@@ -75,7 +75,7 @@ const MAX_BINARY_BYTES = 100 * 1024 * 1024; // allow PDFs up to 100 MB
 const BODY_CAP = 4000;
 
 function readIgnoreFile() {
-  const p = path.join(SCRIPT_DIR, '.mdownignore');
+  const p = path.join(SCRIPT_DIR, '.clawdocignore');
   if (!fs.existsSync(p)) return [];
   return fs.readFileSync(p, 'utf8')
     .split('\n')
@@ -263,7 +263,7 @@ function main() {
   const t0 = Date.now();
 
   for (const root of ROOTS) {
-    // Skip mdown's own folder if it happens to live inside this workspace.
+    // Skip ClawDoc's own folder if it happens to live inside this workspace.
     const rootIgnores = ignores.slice();
     const scriptRel = path.relative(root.path, SCRIPT_DIR);
     if (scriptRel && !scriptRel.startsWith('..') && !path.isAbsolute(scriptRel)) {
@@ -290,7 +290,7 @@ function main() {
   };
   fs.writeFileSync(INDEX_PATH, JSON.stringify(index));
   const rootSummary = ROOTS.map(r => r.name + ' → ' + r.path).join(', ');
-  console.log(`mdown: indexed ${docs.length} docs (${index.stats.md} md, ${index.stats.html} html, ${index.stats.pdf} pdf) across ${folders.size} folders in ${index.stats.durationMs}ms`);
+  console.log(`clawdoc: indexed ${docs.length} docs (${index.stats.md} md, ${index.stats.html} html, ${index.stats.pdf} pdf) across ${folders.size} folders in ${index.stats.durationMs}ms`);
   console.log(`        roots: ${rootSummary}`);
   console.log(`        -> ${INDEX_PATH}`);
 }
