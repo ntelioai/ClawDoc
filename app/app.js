@@ -1736,7 +1736,12 @@
 
     cancelBtn.addEventListener('click', () => {
       if (!confirmDiscardEdits()) return;
-      renderDoc(doc);
+      // Reload so iframes/embeds (HTML, PDF) fetch the freshly saved file
+      // instead of the browser-cached pre-edit copy, and use the fresh doc
+      // reference if the index already refreshed (front-matter / backlinks
+      // may have changed).
+      const fresh = state.docsByPath.get(doc.path) || doc;
+      renderDoc(fresh, '', { reload: true });
     });
 
     const doSave = async () => {
