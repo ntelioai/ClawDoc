@@ -1026,9 +1026,11 @@ function startWatchers() {
 //                    {t:'exit', code:number|null, signal:string|null}
 //                    {t:'error', message:string}
 function findClaudeBinary() {
-  // GUI launches (Spotlight, .app) often have a stripped PATH that misses
-  // /opt/homebrew/bin and /usr/local/bin. Try PATH first, then common spots.
-  const candidates = ['claude'];
+  // GUI launches (Spotlight, .app) get a stripped PATH that misses /opt/homebrew
+  // and ~/.local/bin, so try absolute paths to common install locations first.
+  // Fall back to bare 'claude' last — useful only when the parent's PATH is
+  // already rich (dev mode from a terminal).
+  const candidates = [];
   for (const p of [
     '/opt/homebrew/bin/claude',
     '/usr/local/bin/claude',
@@ -1037,6 +1039,7 @@ function findClaudeBinary() {
   ]) {
     try { if (fs.existsSync(p)) candidates.push(p); } catch {}
   }
+  candidates.push('claude');
   return candidates;
 }
 
@@ -1082,7 +1085,7 @@ server.on('upgrade', (req, socket, head) => {
   });
 });
 
-function attachTerminal(ws, query) {
+async function attachTerminal(ws, query) {
   const cwd = pickTerminalCwd(query);
   const cols = Math.max(20, Math.min(500, parseInt((query && query.cols) || '100', 10) || 100));
   const rows = Math.max(5,  Math.min(200, parseInt((query && query.rows) || '32',  10) || 32));
@@ -1091,21 +1094,68 @@ function attachTerminal(ws, query) {
     if (ws.readyState === 1) ws.send(JSON.stringify(obj));
   };
 
+  // pty.spawn returns "success" even when the target binary can't be exec'd —
+  // node-pty forks a helper that does the actual exec, so PATH-lookup failures
+  // surface as the child exiting almost immediately with no output. Probe each
+  // candidate by buffering its first ~120ms of activity; if the helper exits
+  // with non-zero before writing anything, treat it as exec failure and try
+  // the next candidate. Otherwise commit: replay the buffered bytes to the
+  // client and switch to direct forwarding.
   let term;
   let lastErr;
-  for (const bin of findClaudeBinary()) {
+  let chosenBin;
+  let bufferedOut = '';
+  const candidates = findClaudeBinary();
+  for (const bin of candidates) {
+    let trial;
     try {
-      term = pty.spawn(bin, [], {
+      trial = pty.spawn(bin, [], {
         name: 'xterm-256color',
         cols, rows,
         cwd,
         env: { ...process.env, TERM: 'xterm-256color', COLORTERM: 'truecolor' },
       });
-      break;
     } catch (err) {
       lastErr = err;
+      continue;
     }
+    const decided = await new Promise((resolve) => {
+      let buf = '';
+      let exited = null;
+      const dataSub = trial.onData((d) => {
+        buf += d;
+        // First real data → this is a working process; commit immediately.
+        resolve({ ok: true, buf, exited: null });
+      });
+      const exitSub = trial.onExit((e) => {
+        exited = e;
+        // Exit with no output → likely exec failure. Exit with output is fine
+        // (claude could legitimately print and exit), but the data handler
+        // above would have already resolved in that case.
+        if (buf.length === 0) resolve({ ok: false, buf, exited });
+        else resolve({ ok: true, buf, exited });
+      });
+      // If neither fires within the probe window, the process is alive and
+      // initializing silently — accept it.
+      setTimeout(() => resolve({ ok: true, buf, exited: null }), 150);
+      // We don't dispose dataSub/exitSub here — they're forwarded below when ok.
+      trial._mdownSubs = { dataSub, exitSub };
+    });
+    if (!decided.ok) {
+      console.log(`[terminal] probe ${bin}: exec failed (exit=${decided.exited && decided.exited.exitCode} in <150ms, 0b)`);
+      lastErr = new Error(`exec failed for "${bin}" (exit ${decided.exited && decided.exited.exitCode})`);
+      try { trial._mdownSubs.dataSub.dispose(); trial._mdownSubs.exitSub.dispose(); } catch {}
+      try { trial.kill(); } catch {}
+      continue;
+    }
+    term = trial;
+    chosenBin = bin;
+    bufferedOut = decided.buf;
+    // Tear down the probe listeners; the main handlers below take over.
+    try { trial._mdownSubs.dataSub.dispose(); trial._mdownSubs.exitSub.dispose(); } catch {}
+    break;
   }
+  console.log(`[terminal] spawn bin=${chosenBin || '(none)'} cwd=${cwd} cols=${cols} rows=${rows} tried=${candidates.length} probe_bytes=${bufferedOut.length}`);
   if (!term) {
     send({ t: 'error', message:
       'Could not start Claude Code. Tried: ' + findClaudeBinary().join(', ') +
@@ -1116,6 +1166,8 @@ function attachTerminal(ws, query) {
     return;
   }
 
+  // Replay anything the probe captured before the main handler took over.
+  if (bufferedOut) send({ t: 'out', d: bufferedOut });
   term.onData((d) => send({ t: 'out', d }));
   term.onExit((e) => {
     send({ t: 'exit', code: e.exitCode, signal: e.signal || null });
