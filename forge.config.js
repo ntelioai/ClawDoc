@@ -41,16 +41,24 @@ const cleanupNodePtyBuildArtifacts = (buildPath, _electronVersion, _platform, _a
   }
 };
 
-// After packaging, sign the .app bundle inside-out so AMFI will load it and
-// the subsequent DMG maker bakes a usable bundle into the disk image. Honors
-// CLAWDOC_SIGN_IDENTITY env var (set to a Developer ID for distribution).
-const signPackagedApp = async (forgeConfig, buildPath, electronVersion, platform, arch) => {
-  if (platform !== 'darwin') return;
-  const apps = fs.readdirSync(buildPath).filter(n => n.endsWith('.app'));
+// Sign every .app bundle in out/ inside-out so AMFI will load it. Runs as a
+// preMake hook (after all packaging, including universal stitching, before
+// any maker creates a DMG/zip). Honors CLAWDOC_SIGN_IDENTITY (set to a
+// Developer ID for distribution); defaults to ad-hoc.
+const signAllAppsBeforeMake = async (_forgeConfig) => {
+  if (process.platform !== 'darwin') return;
+  const outDir = path.join(__dirname, 'out');
+  if (!fs.existsSync(outDir)) return;
   const identity = process.env.CLAWDOC_SIGN_IDENTITY || '-';
-  for (const appName of apps) {
-    const appPath = path.join(buildPath, appName);
-    execFileSync(path.join(__dirname, 'scripts/sign-app.sh'), [appPath, identity], { stdio: 'inherit' });
+  for (const entry of fs.readdirSync(outDir)) {
+    const sub = path.join(outDir, entry);
+    if (!fs.statSync(sub).isDirectory()) continue;
+    if (entry === 'make') continue; // skip the makers' output dir
+    for (const name of fs.readdirSync(sub)) {
+      if (!name.endsWith('.app')) continue;
+      const appPath = path.join(sub, name);
+      execFileSync(path.join(__dirname, 'scripts/sign-app.sh'), [appPath, identity], { stdio: 'inherit' });
+    }
   }
 };
 
@@ -93,7 +101,9 @@ module.exports = {
   },
   rebuildConfig: {},
   hooks: {
-    postPackage: signPackagedApp,
+    // Sign every packaged .app *after* universal stitching but *before* any
+    // maker runs, so the DMG/zip contains an already-signed bundle.
+    preMake: signAllAppsBeforeMake,
   },
   makers: [
     // macOS — DMG is the primary distribution format. Drag-to-Applications UX.
