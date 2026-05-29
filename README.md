@@ -1,60 +1,52 @@
-# mdown
+# ClawDoc
 
-Local Markdown / HTML document browser for the Business workspace. Google Drive–like UI: folder tree on the left, folder contents or rendered document on the right, with fast search and cross-document linking.
+A local document browser for your Markdown / HTML / PDF files, with an embedded Claude Code terminal that knows where you are in the tree.
 
-## Run
+Point ClawDoc at one or more folders on disk. It walks them, builds a searchable index, and gives you a Google-Drive-style tree on the left and a rendered document on the right. Markdown gets GitHub-flavored rendering. HTML loads in a sandboxed iframe with relative-link interception so cross-document jumps stay inside ClawDoc. PDFs render inline via the bundled Chromium viewer. The **Claude** button opens a real PTY-backed terminal cwd'd to the workspace of the document you're looking at, inheriting your existing `claude` CLI login.
 
-`mdown` indexes the directory you launch it from (current working directory). The UI assets and the generated `index.json` stay alongside the scripts.
+Everything is local — there's no server, no upload, no telemetry. ClawDoc reads files from disk and serves them to its own embedded browser over loopback.
 
-```bash
-# one-time: install native dep (node-pty) used by the embedded Claude terminal
-cd /path/to/mdown && npm install
+---
 
-# cd into the workspace you want to browse
-cd /path/to/your/workspace
+## Download
 
-# 1) Generate the index
-node /path/to/mdown/index.js
+**[Download ClawDoc 0.1.0 for macOS (Universal: Apple Silicon + Intel)](https://github.com/ntelioai/ClawDoc/releases/latest/download/ClawDoc-0.1.0-universal.dmg)** · 208 MB
 
-# 2) Start the local server
-node /path/to/mdown/serve.js
+Windows and Linux builds are not published yet — the `forge.config.js` is set up for them, but the binaries aren't being produced in CI. Build from source if you need them today (see [Build from source](#build-from-source)).
 
-# 3) Open the UI
-open http://127.0.0.1:7878/
-```
+### First-launch on macOS
 
-The **Reindex** button in the top-right re-runs step 1 without leaving the UI.
+Because ClawDoc isn't yet signed with a Developer ID, macOS Gatekeeper will block it the first time you open it with one of these dialogs:
 
-To point at a folder without changing directories:
+> *"ClawDoc is damaged and can't be opened. You should move it to the Trash."*
+> *"ClawDoc can't be opened because Apple cannot check it for malicious software."*
+
+This is **not** a virus warning — it's Gatekeeper rejecting an unsigned download. To bypass it, after dragging ClawDoc to `/Applications`, run this once in Terminal:
 
 ```bash
-MDOWN_ROOT=/path/to/workspace node /path/to/mdown/serve.js
+xattr -dr com.apple.quarantine /Applications/ClawDoc.app
 ```
 
-### Multiple workspaces
+Then double-click ClawDoc normally. This is a one-time step; it'll launch directly on every subsequent run. We'll remove this step once we ship signed + notarized builds.
 
-Attach more than one folder by repeating `-p`:
+### First-launch — picking a workspace
 
-```bash
-node /path/to/mdown/index.js -p /Volumes/dev/Business -p /Volumes/dev/SomeOther
-node /path/to/mdown/serve.js -p /Volumes/dev/Business -p /Volumes/dev/SomeOther
-```
+The first time you launch ClawDoc, it shows a folder picker. Choose the folder you want to browse. The choice is remembered in `~/Library/Application Support/ClawDoc/settings.json`; you can add or change workspaces later from the UI. Multiple folders show up as top-level entries in the tree.
 
-Each workspace shows up as a top-level folder in the tree (named after the
-folder's basename, with `-2`, `-3`, … appended on collisions). The Reindex
-button automatically re-runs `index.js` with the same `-p` flags `serve.js`
-was launched with.
+---
 
-## What it does
+## Features
 
-- Walks the workspace and indexes every `.md`, `.markdown`, `.html`, `.htm` file (titles, dates parsed from `YYYY-MM-DD_…` filenames, plain-text body extract, outbound links, backlinks).
-- Renders Markdown with GitHub-flavored syntax (tables, fenced code) via `marked` (loaded from CDN).
-- Renders standalone HTML inside a sandboxed iframe; relative `<a>` links to other indexed docs are intercepted and stay inside mdown.
-- Resolves relative image paths against the document's folder.
-- Search ranks title/filename matches above body matches; supports multi-word AND queries.
-- **Claude** button opens an embedded Claude Code terminal (real PTY via [xterm.js](https://xtermjs.org/) + [node-pty](https://github.com/microsoft/node-pty)) cwd'd to the workspace of the doc you're viewing. Inherits your existing `claude` CLI login.
+- **Renders Markdown** with GitHub-flavored syntax (tables, fenced code) via [marked](https://marked.js.org/).
+- **Renders HTML** in a sandboxed iframe; relative `<a>` links to other indexed docs stay inside ClawDoc, relative images resolve against the document's folder.
+- **Renders PDFs** inline via the embedded Chromium PDF viewer (no plugin install).
+- **Search** ranks title/filename matches above body matches and supports multi-word AND queries.
+- **Embedded Claude terminal** — a real PTY (via [xterm.js](https://xtermjs.org/) + [node-pty](https://github.com/microsoft/node-pty)) bound to the `claude` CLI, cwd'd to the doc's workspace.
+- **Multiple workspaces** — attach more than one folder; each shows up as its own top-level tree.
+- **Quick open** (`Cmd/Ctrl+P`) and global search (`/`).
+- **Git-aware** — built-in `isomorphic-git` integration commits document edits with `mdown: edit <files>` messages, and optionally auto-pushes to GitHub if you've signed in.
 
-## Keyboard
+### Keyboard
 
 | Key | Action |
 |---|---|
@@ -64,47 +56,71 @@ was launched with.
 | `↑` / `↓` + `Enter` | Navigate search results |
 | `Esc` | Clear / close overlay |
 
-## Configuration
+---
 
-- **Port** — `MDOWN_PORT=8000 node Utils/mdown/serve.js`
-- **Ignore patterns** — edit `Utils/mdown/.mdownignore` (gitignore-style; matches workspace-relative path or basename). Defaults exclude `archive/`, `Downloads/`, `node_modules/`, `.git/`, and `Utils/mdown/app`.
-- **Workspace root** — the directory you launched from (`process.cwd()`); override with `MDOWN_ROOT=/abs/path`.
-
-## Files
-
-```
-Utils/mdown/
-├── REQUIREMENTS.md       requirements doc
-├── README.md             this file
-├── package.json          npm deps (node-pty, ws — for the embedded terminal)
-├── index.js              CLI: filesystem walker → index.json
-├── serve.js              local HTTP server + WebSocket PTY bridge
-├── .mdownignore          ignore patterns (gitignore-style)
-├── .gitignore            keeps index.json out of git
-├── index.json            generated; rebuilt by Reindex button
-└── app/
-    ├── index.html        UI shell (xterm.js loaded from CDN)
-    ├── app.js            tree, viewer, search, routing, terminal client
-    └── style.css
-```
-
-Two npm deps: `node-pty` (native, drives the embedded Claude terminal) and `ws` (WebSocket server). Front-end loads `marked`, `xterm.js`, and the toast-ui editor from CDN.
-
-## Desktop app
-
-mdown can be packaged as a standalone `.app` / `.exe` / `.deb` via Electron Forge. Quick start:
+## Build from source
 
 ```bash
+git clone https://github.com/ntelioai/ClawDoc.git
+cd ClawDoc
 npm install
-npm start            # dev
-npm run make         # build installer for current OS → out/make/
+npm start              # dev mode (Electron + live workspace picker)
+npm run make           # build installer for the current OS
 ```
 
-Full instructions, cross-platform CI matrix, signing/notarization, and gotchas: see [docs/PACKAGING.md](docs/PACKAGING.md).
+To produce a universal macOS DMG (works on Apple Silicon and Intel):
+
+```bash
+npm run make -- --platform=darwin --arch=universal
+# → out/make/ClawDoc.dmg
+```
+
+For Windows or Linux, run `npm run make` on a `windows-latest` / `ubuntu-latest` runner — `electron-forge make` only builds for the host OS. See [docs/PACKAGING.md](docs/PACKAGING.md) for the full CI matrix and signing/notarization details.
+
+---
+
+## Configuration
+
+ClawDoc stores its writable state in Electron's userData directory:
+
+| Platform | Path |
+|---|---|
+| macOS | `~/Library/Application Support/ClawDoc/` |
+| Linux | `~/.config/ClawDoc/` |
+| Windows | `%APPDATA%\ClawDoc\` |
+
+Files there:
+
+- `settings.json` — workspace list, git config, GitHub token (mode 0600)
+- `index.json` — generated index of every Markdown/HTML/PDF in your workspaces (rebuilt on demand via the **Reindex** button)
+- `mdown.log` — Electron + server log
+
+Environment overrides:
+
+- `MDOWN_ROOT=/path/to/workspace` — skip the picker on first launch
+- `MDOWN_PORT=7879` — pin the embedded server's port (default: random free port)
+- `MDOWN_DATA_DIR=/some/dir` — override where `settings.json` / `index.json` / `mdown.log` live
+
+---
+
+## Privacy & security
+
+- **All processing is local.** ClawDoc reads files from disk and serves them to its own embedded browser over `127.0.0.1`. Nothing is uploaded.
+- **The Claude terminal connects to wherever your `claude` CLI is configured to connect.** ClawDoc itself doesn't touch the Anthropic API.
+- **GitHub token storage**: if you sign in to GitHub from the UI, the OAuth token is stored in `settings.json` with file mode `0600`. Treat that file as you would your shell history.
+
+---
 
 ## Caveats
 
-- `marked` loads from jsDelivr. If you need offline operation, vendor it into `app/vendor/marked.min.js` and update the `<script>` tag in `app/index.html`.
-- HTML decks render inside a sandboxed iframe; their internal JS still runs (with `allow-scripts`) but cannot reach the parent. Cross-doc link interception works only when the iframe is same-origin (it is, via `/file?path=…`).
-- Markdown rendering does not currently sanitize HTML inside Markdown — this is a single-user local tool reading your own files.
+- The frontend loads `marked`, `xterm.js`, and the toast-ui editor from jsDelivr. ClawDoc therefore needs network access on first launch to render Markdown and open the terminal. Vendoring those is on the roadmap.
+- HTML decks render inside a sandboxed iframe. Cross-doc link interception works because the iframe is same-origin (served from `/raw/<path>`).
 - The index covers up to 2 MB per file; larger files are skipped.
+- Markdown rendering does not sanitize HTML inside Markdown — this is a single-user local tool reading your own files.
+- Auto-update is not configured. To upgrade, download a new build from [Releases](https://github.com/ntelioai/ClawDoc/releases).
+
+---
+
+## License
+
+Internal / proprietary — not licensed for redistribution. Contact [rabih@ntelio.ai](mailto:rabih@ntelio.ai) if you'd like to use it.
