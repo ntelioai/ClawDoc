@@ -1874,6 +1874,7 @@
 
   function updateChatContext() {
     const ctx = $('#chat-context');
+    const insertBtn = $('#chat-insert');
     if (!ctx) return;
     const full = state.currentDoc ? state.currentDoc.path
                : state.currentFolder ? state.currentFolder
@@ -1882,6 +1883,10 @@
       ctx.textContent = '';
       ctx.removeAttribute('data-insertable');
       ctx.removeAttribute('title');
+      if (insertBtn) {
+        insertBtn.disabled = true;
+        insertBtn.title = 'Select a file or folder in the tree to insert its path';
+      }
       return;
     }
     const { workspace, rel } = splitWorkspacePath(full);
@@ -1892,12 +1897,22 @@
       ctx.textContent = '@' + showRel;
       ctx.setAttribute('data-insertable', '1');
       ctx.title = 'Click to insert “@' + showRel + '” into the prompt';
+      if (insertBtn) {
+        insertBtn.disabled = false;
+        insertBtn.title = 'Insert “@' + showRel + '” at the cursor';
+      }
     } else {
       ctx.textContent = full + (isFolder ? '/' : '');
       ctx.removeAttribute('data-insertable');
       ctx.title = chat.sessionWorkspace
         ? `In workspace "${workspace}", but the terminal is rooted in "${chat.sessionWorkspace}". Restart to switch.`
         : full;
+      if (insertBtn) {
+        insertBtn.disabled = true;
+        insertBtn.title = chat.sessionWorkspace
+          ? `Selection is in "${workspace}" but the terminal is rooted in "${chat.sessionWorkspace}". Restart Claude to switch workspace.`
+          : 'Open a Claude session first';
+      }
     }
   }
 
@@ -1963,12 +1978,6 @@
               || (state.index && state.index.roots && state.index.roots[0] && state.index.roots[0].name)
               || '';
     chat.sessionWorkspace = ws_name;
-    // If a doc is selected when the session opens, queue an @-mention to drop
-    // into Claude's prompt buffer once it's ready — orient the assistant
-    // without forcing the user to type anything. The space at the end lets
-    // them keep typing immediately.
-    const initialRel = (state.currentDoc && splitWorkspacePath(state.currentDoc.path).rel) || '';
-    chat.pendingInsert = initialRel ? '@' + initialRel + ' ' : '';
     updateChatContext();
 
     const ws = new WebSocket(proto + location.host + '/terminal?' + params.toString());
@@ -1980,26 +1989,11 @@
       try { chat.fit.fit(); } catch {}
       sendResize();
     };
-    let firstOutAt = 0;
-    let pendingFlushed = false;
     ws.onmessage = (ev) => {
       let msg;
       try { msg = JSON.parse(ev.data); } catch { return; }
       if (msg.t === 'out') {
         chat.xterm.write(msg.d);
-        if (!firstOutAt) firstOutAt = Date.now();
-        // Once Claude's TUI has had ~1.2s after first paint to settle into its
-        // prompt, drop the queued @path into stdin. If nothing was queued this
-        // is a no-op.
-        if (!pendingFlushed && chat.pendingInsert) {
-          pendingFlushed = true;
-          setTimeout(() => {
-            if (chat.ws === ws && ws.readyState === 1 && chat.pendingInsert) {
-              ws.send(JSON.stringify({ t: 'in', d: chat.pendingInsert }));
-              chat.pendingInsert = '';
-            }
-          }, 1200);
-        }
       } else if (msg.t === 'exit') {
         const code = msg.code == null ? '?' : msg.code;
         chat.xterm.write(`\r\n\x1b[2m[claude exited (code ${code})]\x1b[0m\r\n`);
@@ -3377,6 +3371,7 @@
     $('#chat-restart').addEventListener('click', restartChat);
     $('#chat-theme').addEventListener('click', toggleTermTheme);
     $('#chat-context').addEventListener('click', insertCurrentPathIntoTerminal);
+    $('#chat-insert').addEventListener('click', insertCurrentPathIntoTerminal);
     applyTermTheme(chat.theme); // set initial data-term-theme on the panel
     initChatResize();
     window.addEventListener('beforeunload', () => {

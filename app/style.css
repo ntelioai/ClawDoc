@@ -1311,6 +1311,9 @@ mark.hl { background: #ffe9a8; color: inherit; padding: 0 1px; border-radius: 2p
 .chat-head-actions button:hover { color: var(--tp-btn-hover-fg); border-color: var(--accent); }
 #chat-close { width: 24px; padding: 0; font-size: 13px; line-height: 1; }
 #chat-theme { width: 28px; padding: 0; }
+#chat-insert { gap: 4px; }
+#chat-insert:disabled { opacity: 0.45; cursor: default; }
+#chat-insert:disabled:hover { color: var(--tp-btn-fg); border-color: var(--tp-border); }
 #chat-theme .theme-icon { display: none; }
 .chat-panel[data-term-theme="dark"]  #chat-theme .theme-icon-light { display: block; }
 .chat-panel[data-term-theme="light"] #chat-theme .theme-icon-dark  { display: block; }
