@@ -63,6 +63,7 @@ html, body {
 .brand-link {
   display: inline-flex;
   align-items: center;
+  gap: 12px;
   text-decoration: none;
   padding: 4px 6px;
   border-radius: 6px;
@@ -70,9 +71,25 @@ html, body {
 }
 .brand-link:hover { background: var(--bg-hover); }
 .brand-logo {
-  height: 26px;
+  position: relative;
+  left: 5px;
+  top: 0px;
+  height: 50px;
   width: auto;
   display: block;
+  flex-shrink: 0;
+}
+.brand-mark {
+  position: relative;
+  left: 5px;
+  font-family: 'Faster One', var(--font-ui);
+  font-size: 35px;
+  font-weight: 400;     /* Faster One ships only at weight 400 */
+  color: #e46a53;
+  line-height: 1;
+  white-space: nowrap;
+  /* Faster One is a chunky display face — give it a touch of air. */
+  letter-spacing: 0.01em;
 }
 .search-wrap {
   position: relative;
