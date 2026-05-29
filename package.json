@@ -1,0 +1,40 @@
+{
+  "name": "mdown",
+  "version": "0.2.0",
+  "private": true,
+  "description": "Local Markdown/HTML browser with embedded Claude Code terminal.",
+  "main": "electron-main.js",
+  "bin": {
+    "mdown": "./serve.js"
+  },
+  "scripts": {
+    "start": "electron-forge start",
+    "package": "electron-forge package",
+    "make": "electron-forge make"
+  },
+  "dependencies": {
+    "@octokit/auth-oauth-device": "^8.0.3",
+    "@octokit/request": "^10.0.10",
+    "chokidar": "^5.0.0",
+    "diff": "^9.0.0",
+    "isomorphic-git": "^1.38.3",
+    "node-pty": "1.2.0-beta.13",
+    "ws": "^8.18.0"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "devDependencies": {
+    "@electron-forge/cli": "^7.11.2",
+    "@electron-forge/maker-deb": "^7.11.2",
+    "@electron-forge/maker-dmg": "^7.11.2",
+    "@electron-forge/maker-rpm": "^7.11.2",
+    "@electron-forge/maker-squirrel": "^7.11.2",
+    "@electron-forge/maker-zip": "^7.11.2",
+    "@electron-forge/plugin-auto-unpack-natives": "^7.11.2",
+    "@electron-forge/plugin-fuses": "^7.11.2",
+    "@electron/fuses": "^2.1.1",
+    "electron": "^42.3.0",
+    "png-to-ico": "^3.0.1"
+  }
+}

@@ -1,0 +1,186 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>mdown</title>
+<link rel="icon" type="image/x-icon" href="/app/assets/favicon.ico">
+<link rel="apple-touch-icon" href="/app/assets/ntelio-logo.png">
+<link rel="stylesheet" href="https://uicdn.toast.com/editor/3.2.2/toastui-editor.min.css">
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@xterm/xterm@5.5.0/css/xterm.min.css">
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/diff2html@3.4.51/bundles/css/diff2html.min.css">
+<link rel="stylesheet" href="/app/style.css">
+</head>
+<body>
+<div id="app">
+  <header class="topbar">
+    <div class="brand">
+      <a href="#folder=" class="brand-link" title="ntelio">
+        <img class="brand-logo" src="/app/assets/ntelio-logo.png" alt="ntelio">
+      </a>
+    </div>
+    <div class="search-wrap">
+      <svg class="search-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.35-4.35"/></svg>
+      <input id="search" placeholder="Search titles, content, paths…   /  to focus" autocomplete="off" spellcheck="false">
+      <div id="search-results" class="search-results hidden"></div>
+    </div>
+    <div class="topbar-actions">
+      <span id="status" class="status"></span>
+      <button id="git-pill" class="git-pill hidden" title="GitHub sync status — click for settings">
+        <svg class="git-icon" width="14" height="14" viewBox="0 0 16 16" fill="currentColor"><path d="M8 0C3.58 0 0 3.58 0 8a8 8 0 0 0 5.47 7.59c.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2 .37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0 0 16 8c0-4.42-3.58-8-8-8z"/></svg>
+        <span class="git-pill-text"></span>
+      </button>
+      <button id="mc-toggle" title="Two-pane file manager mode (drag-and-drop to reorganize)" aria-label="Toggle two-pane file manager">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="8" height="16" rx="1"/><rect x="13" y="4" width="8" height="16" rx="1"/></svg>
+      </button>
+      <button id="chat-toggle" title="Open Claude Code terminal for this workspace">Claude</button>
+      <button id="reindex" title="Regenerate index (rescans the filesystem)">Reindex</button>
+      <button id="settings-toggle" class="topbar-icon-btn" title="Settings" aria-label="Settings">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09a1.65 1.65 0 0 0-1-1.51 1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09a1.65 1.65 0 0 0 1.51-1 1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33h0a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51h0a1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82v0a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+      </button>
+    </div>
+  </header>
+  <div class="tabbar" id="tabbar">
+    <div class="tabs" id="tabs"></div>
+    <button class="tab-new" id="tab-new" title="New tab (Cmd+T)">+</button>
+  </div>
+  <main class="main">
+    <aside class="sidebar" id="sidebar">
+      <div class="sidebar-head">
+        <input id="tree-filter" placeholder="Filter folders…   Cmd+K" autocomplete="off" spellcheck="false">
+        <button id="tree-expand-all" class="tree-btn" title="Expand all folders" aria-label="Expand all folders">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><polyline points="7 6 12 11 17 6"/><polyline points="7 13 12 18 17 13"/></svg>
+        </button>
+        <button id="tree-collapse-all" class="tree-btn" title="Collapse all folders" aria-label="Collapse all folders">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><polyline points="17 11 12 6 7 11"/><polyline points="17 18 12 13 7 18"/></svg>
+        </button>
+        <button id="tree-display-toggle" class="tree-btn" title="Show filenames instead of document titles" aria-label="Toggle tree display: titles or filenames">
+          <svg class="tree-display-icon tree-display-icon-title" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 6V4h14v2"/><path d="M12 4v16"/><path d="M9 20h6"/></svg>
+        <svg class="tree-display-icon tree-display-icon-filename" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><polyline points="16 18 22 12 16 6"/><polyline points="8 6 2 12 8 18"/></svg>
+        </button>
+      </div>
+      <div id="tree" class="tree" tabindex="0"></div>
+      <div class="sidebar-foot">
+        <span id="doc-count"></span>
+      </div>
+    </aside>
+    <div id="sidebar-resizer" class="sidebar-resizer" title="Drag to resize · double-click to reset"></div>
+    <section class="content">
+      <div id="breadcrumb" class="breadcrumb"></div>
+      <div id="viewer" class="viewer">
+        <div class="empty">
+          <div class="empty-title">mdown</div>
+          <div class="empty-sub">Browse your <code>.md</code> and <code>.html</code> documents.</div>
+          <div class="empty-hints">
+            <div><kbd>/</kbd> search everything</div>
+            <div><kbd>Cmd</kbd>+<kbd>K</kbd> filter folders</div>
+            <div><kbd>Cmd</kbd>+<kbd>P</kbd> quick-open by filename</div>
+            <div><kbd>Esc</kbd> clear</div>
+          </div>
+        </div>
+      </div>
+    </section>
+  </main>
+  <div id="preview-modal" class="preview-modal hidden" role="dialog" aria-labelledby="preview-title">
+    <div class="preview-panel">
+      <div class="preview-head">
+        <div class="preview-title" id="preview-title"></div>
+        <div class="preview-sub" id="preview-sub"></div>
+        <button id="preview-open" class="preview-btn" title="Open in viewer">Open</button>
+        <button id="preview-close" class="preview-close" title="Close (Esc or Space)" aria-label="Close">✕</button>
+      </div>
+      <div class="preview-body" id="preview-body"></div>
+    </div>
+  </div>
+  <div id="mc-mode" class="mc-mode hidden">
+    <div class="mc-bar">
+      <span class="mc-bar-title">Two-pane mode</span>
+      <span class="mc-bar-hint">Drag files between panes to move them · double-click a file to open · Esc to exit</span>
+      <button id="mc-exit" class="mc-bar-exit" title="Exit (Esc)">Exit</button>
+    </div>
+    <div class="mc-panes">
+      <section class="mc-pane" data-pane="a">
+        <div class="mc-pane-head">
+          <input class="mc-pane-filter" data-pane-filter="a" placeholder="Filter…" autocomplete="off" spellcheck="false">
+          <button class="tree-btn" data-pane-expand-all="a" title="Expand all folders in this pane" aria-label="Expand all folders">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><polyline points="7 6 12 11 17 6"/><polyline points="7 13 12 18 17 13"/></svg>
+          </button>
+          <button class="tree-btn" data-pane-collapse-all="a" title="Collapse all folders in this pane" aria-label="Collapse all folders">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><polyline points="17 11 12 6 7 11"/><polyline points="17 18 12 13 7 18"/></svg>
+          </button>
+        </div>
+        <div class="mc-pane-tree" data-pane-tree="a"></div>
+      </section>
+      <div class="mc-panes-divider"></div>
+      <section class="mc-pane" data-pane="b">
+        <div class="mc-pane-head">
+          <input class="mc-pane-filter" data-pane-filter="b" placeholder="Filter…" autocomplete="off" spellcheck="false">
+          <button class="tree-btn" data-pane-expand-all="b" title="Expand all folders in this pane" aria-label="Expand all folders">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><polyline points="7 6 12 11 17 6"/><polyline points="7 13 12 18 17 13"/></svg>
+          </button>
+          <button class="tree-btn" data-pane-collapse-all="b" title="Collapse all folders in this pane" aria-label="Collapse all folders">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><polyline points="17 11 12 6 7 11"/><polyline points="17 18 12 13 7 18"/></svg>
+          </button>
+        </div>
+        <div class="mc-pane-tree" data-pane-tree="b"></div>
+      </section>
+    </div>
+  </div>
+  <div id="quick-open" class="quick-open hidden">
+    <div class="quick-open-panel">
+      <input id="quick-open-input" placeholder="Quick open: type part of a filename or title…" autocomplete="off" spellcheck="false">
+      <div id="quick-open-results" class="quick-open-results"></div>
+    </div>
+  </div>
+  <div id="ctx-menu" class="ctx-menu hidden" role="menu"></div>
+  <div id="settings-modal" class="settings-modal hidden" role="dialog" aria-labelledby="settings-title">
+    <div class="settings-panel">
+      <div class="settings-head">
+        <h2 id="settings-title">Settings</h2>
+        <button id="settings-close" class="settings-close" title="Close (Esc)" aria-label="Close">✕</button>
+      </div>
+      <div class="settings-body" id="settings-body"></div>
+    </div>
+  </div>
+  <div id="history-modal" class="history-modal hidden" role="dialog" aria-labelledby="history-title">
+    <div class="history-panel">
+      <div class="history-head">
+        <h2 id="history-title">History</h2>
+        <div class="history-doc" id="history-doc"></div>
+        <button id="history-close" class="history-close" title="Close (Esc)" aria-label="Close">✕</button>
+      </div>
+      <div class="history-body">
+        <div class="history-commits" id="history-commits"></div>
+        <div class="history-diff" id="history-diff"></div>
+      </div>
+    </div>
+  </div>
+  <aside id="chat-panel" class="chat-panel hidden">
+    <div id="chat-resizer" class="chat-resizer" title="Drag to resize"></div>
+    <div class="chat-head">
+      <div class="chat-title">Claude Code</div>
+      <div id="chat-context" class="chat-context"></div>
+      <div class="chat-head-actions">
+        <button id="chat-theme" title="Toggle terminal theme (dark/light)" aria-label="Toggle terminal theme">
+          <svg class="theme-icon theme-icon-dark" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>
+          <svg class="theme-icon theme-icon-light" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M4.93 19.07l1.41-1.41M17.66 6.34l1.41-1.41"/></svg>
+        </button>
+        <button id="chat-restart" title="Restart session">Restart</button>
+        <button id="chat-close" title="Close (Esc when terminal not focused)">✕</button>
+      </div>
+    </div>
+    <div id="terminal" class="terminal-host"></div>
+    <div class="chat-foot">
+      <span id="chat-status" class="chat-status">starting…</span>
+    </div>
+  </aside>
+</div>
+<script src="https://cdn.jsdelivr.net/npm/marked@12.0.0/marked.min.js"></script>
+<script src="https://uicdn.toast.com/editor/3.2.2/toastui-editor-all.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@xterm/xterm@5.5.0/lib/xterm.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@xterm/addon-fit@0.10.0/lib/addon-fit.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@xterm/addon-web-links@0.11.0/lib/addon-web-links.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/diff2html@3.4.51/bundles/js/diff2html-ui.min.js"></script>
+<script src="/app/app.js"></script>
+</body>
+</html>

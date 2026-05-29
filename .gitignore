@@ -1,0 +1,9 @@
+node_modules/
+out/
+index.json
+settings.json
+mdown.log
+.DS_Store
+*.log
+.env
+.env.local
