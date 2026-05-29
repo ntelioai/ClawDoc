@@ -336,6 +336,35 @@ unset ELECTRON_RUN_AS_NODE
 
 End users won't hit this — LaunchServices doesn't propagate shell environment to GUI apps.
 
+### `node-pty` needs its `spawn-helper` unpacked too
+
+`node-pty` ships **two** binaries: `pty.node` (the Node addon) and `spawn-helper` (a small Mach-O / ELF executable that node-pty `execve`s as part of PTY setup). The default `@electron-forge/plugin-auto-unpack-natives` plugin only unpacks `*.node` files — so `spawn-helper` stays trapped inside `app.asar` where the kernel can't exec it.
+
+Symptom inside the packaged app:
+
+```
+Could not start Claude Code. Tried: claude, /opt/homebrew/bin/claude, ...
+Underlying error: posix_spawn failed: No such file or directory
+```
+
+The misleading part: the ENOENT is about `spawn-helper`, **not** about the binary you asked node-pty to launch. node-pty's error surface doesn't distinguish — any failure inside `pty.spawn()` looks like the target binary couldn't be found.
+
+Fix in [`forge.config.js`](../forge.config.js): extend `packagerConfig.asar.unpack` to cover the helper:
+
+```js
+packagerConfig: {
+  asar: { unpack: '**/{spawn-helper,*.dylib,*.so}' },
+}
+```
+
+The plugin merges this with its own `**/*.node` pattern, so all three classes of files get unpacked. After rebuilding, verify with:
+
+```bash
+find out/<name>-darwin-arm64/<Name>.app/Contents/Resources/app.asar.unpacked -name spawn-helper
+```
+
+Same gotcha applies to any other native module that ships an auxiliary binary (e.g. `keytar`'s `keytar.js` is fine since it's pure `*.node`, but some `sqlite` builds ship a CLI helper). When you add a new native dep, do an `npm run package` and check what made it into `app.asar.unpacked` — if a sibling binary is missing, extend the unpack pattern.
+
 ### Ad-hoc signed apps don't survive transit
 
 The unsigned/ad-hoc `.app` produced by a vanilla `npm run make` will run on the build machine, but if you zip it, send it to someone, they unzip and double-click — macOS marks the unzipped bundle as quarantined and Gatekeeper refuses to launch it (no error dialog on some macOS versions; some show "mdown is damaged and can't be opened").

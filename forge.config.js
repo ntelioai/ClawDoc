@@ -9,7 +9,12 @@ module.exports = {
     // No extension — Electron Packager picks build/icon.icns on macOS,
     // build/icon.ico on Windows, and build/icon.png on Linux automatically.
     icon: 'build/icon',
-    asar: true,
+    // node-pty ships a `spawn-helper` Mach-O binary alongside pty.node — the
+    // PTY setup execs it, and ENOENT crashes the embedded terminal if it
+    // stays inside the asar. The auto-unpack-natives plugin only unpacks
+    // *.node files, so we extend the pattern to also cover spawn-helper and
+    // any other native dylibs/sos a module might ship.
+    asar: { unpack: '**/{spawn-helper,*.dylib,*.so}' },
     ignore: [
       /^\/index\.json$/,
       /^\/settings\.json$/,
