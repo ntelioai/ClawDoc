@@ -1,4 +1,4 @@
 - Change the icon in the packaged macos app to the clawdoc logo (crab shuffling docs) not ntelio logo
 - Using browser alerts works in the browser not in the packaged app
 - move reindex into the settings dialog
-- 
+- the diff view (History) is overflowing the dialog 
