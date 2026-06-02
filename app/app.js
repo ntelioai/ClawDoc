@@ -2099,6 +2099,7 @@
     initialized: false,
     sessionWorkspace: '',  // top-level workspace name the session is rooted in
     sessionId: '',         // captured from system/init, used for --resume
+    model: '',             // captured from system/init, shown in the ready status
     cwd: '',               // absolute cwd reported by the server (for path links)
     running: false,        // a turn is in flight
     // Default to auto-accepting edits so the common "make me a file" case works.
@@ -2374,8 +2375,10 @@
     if (!ev || !ev.type) return;
     if (ev.type === 'system' && ev.subtype === 'init') {
       if (ev.session_id) agent.sessionId = ev.session_id;
-      const pm = ev.permissionMode || agent.mode;
-      setAgentStatus('ready · ' + (ev.model || '') + ' · ' + (MODE_LABELS[pm] || pm));
+      if (ev.model) agent.model = ev.model;
+      if (ev.permissionMode) agent.mode = ev.permissionMode;
+      // We're mid-turn here (init only arrives after the first message), so
+      // don't flip the footer to "ready" — agEndTurn shows it when the turn ends.
       return;
     }
     if (ev.type === 'rate_limit_event') return;
@@ -2488,7 +2491,8 @@
     const btn = $('#agent-submit');
     btn.classList.remove('is-running');
     btn.title = 'Send (Enter)';
-    setAgentStatus('ready');
+    const pm = agent.mode;
+    setAgentStatus('ready · ' + (agent.model || '') + ' · ' + (MODE_LABELS[pm] || pm));
     if (agent.queued) {
       const q = agent.queued;
       agent.queued = '';
@@ -2517,7 +2521,7 @@
     setAgentStatus('connecting…');
     ws.onmessage = (e) => {
       let m; try { m = JSON.parse(e.data); } catch { return; }
-      if (m.t === 'started') { agent.cwd = m.cwd || ''; setAgentStatus('starting…'); }
+      if (m.t === 'started') { agent.cwd = m.cwd || ''; if (!agent.running) setAgentStatus('connecting…'); }
       else if (m.t === 'event') agHandleEvent(m.ev);
       else if (m.t === 'error') { agSystem(m.message, true); agEndTurn(); }
       else if (m.t === 'exit') {
@@ -2660,7 +2664,11 @@
     agent.initialized = true;
     applyAgentTheme(agent.theme);
     agClear();
-    connectAgent();
+    // Lazy: don't spawn a claude process just because the panel opened. claude
+    // stays silent (no system/init) until the first user message, so connecting
+    // early would leave the footer stuck on "starting…". We connect on the
+    // first send instead (agSendText -> connectAgent).
+    setAgentStatus('idle');
   }
   function openAgent() {
     agent.open = true;
@@ -2682,9 +2690,10 @@
     if (agent.ws) { try { agent.ws.close(); } catch {} }
     agent.ws = null;
     agent.sessionId = '';   // fresh conversation
+    agent.running = false;
     agClear();
-    setAgentStatus('restarting…');
-    connectAgent();
+    // Stay lazy — a fresh process spawns on the next message, not now.
+    setAgentStatus('idle');
   }
   function isAgentFocused() {
     const p = $('#agent-panel');
