@@ -69,7 +69,7 @@ html, body {
   border-radius: 6px;
   transition: background 0.1s;
 }
-.brand-link:hover { background: var(--bg-hover); }
+/* No hover highlight on the brand — the logo + wordmark stand on their own. */
 .brand-logo {
   position: relative;
   left: 5px;
@@ -2168,9 +2168,58 @@ body.mc-on .tabbar { display: none !important; }
 }
 .history-commit .hc-meta { color: var(--text-dim); margin-top: 2px; font-size: 11px; }
 .history-commit .hc-meta code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
-.history-diff { overflow: auto; background: var(--bg); padding: 8px 12px; }
+/* min-width:0 lets this grid track shrink below the diff table's intrinsic
+   width so the side-by-side diff scrolls inside the pane instead of
+   overflowing the dialog. */
+.history-diff { overflow: auto; min-width: 0; background: var(--bg); padding: 8px 12px; }
 .history-diff .empty {
   color: var(--text-dim); text-align: center; padding: 40px 20px;
   font-size: 13px;
 }
 .history-diff .d2h-wrapper { font-size: 12px; }
+
+/* ---------- in-app dialogs (alert / confirm / prompt replacements) ---------- */
+.ui-dialog-overlay {
+  position: fixed; inset: 0;
+  background: rgba(0, 0, 0, 0.4);
+  display: flex; align-items: center; justify-content: center;
+  z-index: 1000;
+}
+.ui-dialog-panel {
+  width: min(440px, 92vw);
+  background: var(--bg-elev);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  box-shadow: 0 20px 60px rgba(0,0,0,0.35);
+  padding: 18px 18px 14px;
+  display: flex; flex-direction: column; gap: 12px;
+}
+.ui-dialog-title { font-size: 14px; font-weight: 600; color: var(--text); }
+.ui-dialog-message { font-size: 13px; line-height: 1.5; color: var(--text); white-space: pre-wrap; word-break: break-word; }
+.ui-dialog-input {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 8px 10px;
+  font-size: 13px;
+  color: var(--text);
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+.ui-dialog-input:focus { outline: none; border-color: var(--accent); }
+.ui-dialog-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 2px; }
+.ui-dialog-btn {
+  padding: 6px 14px;
+  font-size: 13px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg);
+  color: var(--text);
+  cursor: pointer;
+}
+.ui-dialog-btn:hover { background: var(--bg-hover); }
+.ui-dialog-btn-primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+.ui-dialog-btn-primary:hover { filter: brightness(1.06); background: var(--accent); }
+.ui-dialog-btn-danger { background: #c0392b; border-color: #c0392b; color: #fff; }
+.ui-dialog-btn-danger:hover { filter: brightness(1.06); background: #c0392b; }

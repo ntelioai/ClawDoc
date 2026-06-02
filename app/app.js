@@ -172,6 +172,79 @@
     return normalizePath((fromDir ? fromDir + '/' : '') + href);
   };
 
+  // ---------- in-app dialogs ----------
+  // Replaces window.alert / confirm / prompt, which don't all work in the
+  // packaged Electron app (prompt() in particular is unsupported there). These
+  // return Promises: uiAlert -> void, uiConfirm -> bool, uiPrompt -> string|null.
+  function uiDialog({ title, message, input, confirm, danger }) {
+    return new Promise(resolve => {
+      const lastFocus = document.activeElement;
+      const overlay = el('div', { class: 'ui-dialog-overlay' });
+      const panel = el('div', { class: 'ui-dialog-panel', role: 'dialog', 'aria-modal': 'true' });
+      if (title) panel.appendChild(el('div', { class: 'ui-dialog-title' }, title));
+      if (message) panel.appendChild(el('div', { class: 'ui-dialog-message' }, message));
+
+      let field = null;
+      if (input) {
+        field = el('input', {
+          class: 'ui-dialog-input', type: 'text',
+          value: input.value || '', placeholder: input.placeholder || '',
+          spellcheck: 'false', autocomplete: 'off',
+        });
+        panel.appendChild(field);
+      }
+
+      const isPrompt = !!input;
+      const isConfirm = !!confirm || isPrompt;
+      const actions = el('div', { class: 'ui-dialog-actions' });
+
+      let settled = false;
+      const close = (val) => {
+        if (settled) return;
+        settled = true;
+        document.removeEventListener('keydown', onKey, true);
+        overlay.remove();
+        try { if (lastFocus && lastFocus.focus) lastFocus.focus(); } catch {}
+        resolve(val);
+      };
+
+      if (isConfirm) {
+        const cancel = el('button', { class: 'ui-dialog-btn' }, (input && input.cancelLabel) || 'Cancel');
+        cancel.addEventListener('click', () => close(isPrompt ? null : false));
+        actions.appendChild(cancel);
+      }
+      const okLabel = (input && input.okLabel) || 'OK';
+      const ok = el('button', { class: 'ui-dialog-btn ui-dialog-btn-primary' + (danger ? ' ui-dialog-btn-danger' : '') }, okLabel);
+      ok.addEventListener('click', () => close(isPrompt ? field.value : (isConfirm ? true : undefined)));
+      actions.appendChild(ok);
+      panel.appendChild(actions);
+
+      const onKey = (ev) => {
+        if (ev.key === 'Escape') { ev.preventDefault(); ev.stopPropagation(); close(isPrompt ? null : (isConfirm ? false : undefined)); }
+        else if (ev.key === 'Enter') {
+          // In a prompt the input swallows Enter; submit from anywhere.
+          ev.preventDefault(); ev.stopPropagation();
+          close(isPrompt ? field.value : (isConfirm ? true : undefined));
+        }
+      };
+      document.addEventListener('keydown', onKey, true);
+      overlay.addEventListener('mousedown', (ev) => {
+        if (ev.target === overlay) close(isPrompt ? null : (isConfirm ? false : undefined));
+      });
+
+      overlay.appendChild(panel);
+      document.body.appendChild(overlay);
+      if (field) { field.focus(); field.select(); }
+      else ok.focus();
+    });
+  }
+  const uiAlert   = (message, opts = {}) => uiDialog({ message, title: opts.title, danger: opts.kind === 'danger' });
+  const uiConfirm = (message, opts = {}) => uiDialog({ message, title: opts.title, confirm: true, danger: opts.kind === 'danger' });
+  const uiPrompt  = (message, value = '', opts = {}) =>
+    uiDialog({ message, title: opts.title, danger: opts.kind === 'danger', input: {
+      value, placeholder: opts.placeholder || '', okLabel: opts.okLabel, cancelLabel: opts.cancelLabel,
+    } });
+
   // ---------- icons ----------
   const ICON_FOLDER = '<svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M10 4H4c-1.1 0-1.99.9-1.99 2L2 18c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V8c0-1.1-.9-2-2-2h-8l-2-2z" opacity="0.85"/></svg>';
   const ICON_FOLDER_OPEN = '<svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M20 6h-8l-2-2H4c-1.1 0-1.99.9-1.99 2L2 18c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V8c0-1.1-.9-2-2-2zm0 12H4V8h16v10z" opacity="0.85"/></svg>';
@@ -195,8 +268,8 @@
       if (!r.ok) {
         if (r.status === 404) {
           if (!silent) {
-            setStatus('no index — click Reindex', 'error');
-            renderEmpty('No index yet — click <strong>Reindex</strong> in the top-right to generate one.');
+            setStatus('no index — open Settings to Reindex', 'error');
+            renderEmpty('No index yet — open <strong>Settings</strong> and click <strong>Reindex</strong> to generate one.');
           }
           return;
         }
@@ -1311,9 +1384,10 @@
   });
 
   // ---------- reindex ----------
-  async function doReindex() {
-    const btn = $('#reindex');
-    btn.disabled = true;
+  // `btn` is optional — the Reindex control now lives in the Settings dialog,
+  // so callers pass their own button to disable while the rescan runs.
+  async function doReindex(btn) {
+    if (btn) btn.disabled = true;
     setStatus('reindexing…');
     try {
       const r = await fetch('/api/reindex', { method: 'POST' });
@@ -1321,16 +1395,37 @@
       if (data.code === 0) {
         await loadIndex();
         setStatus('reindexed', 'ok');
+        return true;
       } else {
         console.error(data);
         setStatus('reindex failed', 'error');
+        return false;
       }
     } catch (err) {
       console.error(err);
       setStatus('reindex error', 'error');
+      return false;
     } finally {
-      btn.disabled = false;
+      if (btn) btn.disabled = false;
     }
+  }
+
+  // Reindex control rendered inside the Settings → Index section. Reindexing
+  // refreshes the stats, so on success we re-render the settings body.
+  function buildReindexRow() {
+    const row = el('div', { class: 'settings-row' });
+    row.appendChild(el('span', { class: 'sr-key' }, 'Reindex'));
+    row.appendChild(el('span', { class: 'sr-val' }, 'Rescan the filesystem and rebuild the index'));
+    const btn = el('button', { title: 'Regenerate index (rescans the filesystem)' }, 'Reindex');
+    btn.addEventListener('click', async () => {
+      const orig = btn.textContent;
+      btn.textContent = 'Reindexing…';
+      const ok = await doReindex(btn);
+      btn.textContent = orig;
+      if (ok && !$('#settings-modal').classList.contains('hidden')) renderSettings();
+    });
+    row.appendChild(btn);
+    return row;
   }
 
   // ---------- settings modal ----------
@@ -1513,6 +1608,15 @@
         list.appendChild(row);
       }
       statsSection.appendChild(list);
+      statsSection.appendChild(buildReindexRow());
+      body.appendChild(statsSection);
+    } else {
+      // No index yet — still offer a way to generate one from Settings.
+      const statsSection = el('div', { class: 'settings-section' });
+      statsSection.appendChild(el('h3', null, 'Index'));
+      statsSection.appendChild(el('div', { class: 'settings-help' },
+        'No index yet — rescan the filesystem to generate one.'));
+      statsSection.appendChild(buildReindexRow());
       body.appendChild(statsSection);
     }
 
@@ -1549,8 +1653,8 @@
     clearAllRow.appendChild(el('span', { class: 'sr-key' }, 'Reset everything'));
     clearAllRow.appendChild(el('span', { class: 'sr-val' }, 'Clears all clawdoc.* keys and reloads'));
     const allBtn = el('button', { class: 'danger' }, 'Reset & reload');
-    allBtn.addEventListener('click', () => {
-      if (!confirm('Reset all saved preferences (tabs, zoom, sidebar, sort) and reload?')) return;
+    allBtn.addEventListener('click', async () => {
+      if (!(await uiConfirm('Reset all saved preferences (tabs, zoom, sidebar, sort) and reload?', { title: 'Reset preferences', kind: 'danger' }))) return;
       for (let i = localStorage.length - 1; i >= 0; i--) {
         const k = localStorage.key(i);
         if (k && k.startsWith('clawdoc.')) localStorage.removeItem(k);
@@ -1655,6 +1759,11 @@
     return cur !== state.editorOriginal;
   }
 
+  // Intentionally uses the native confirm() (which works in packaged Electron —
+  // only prompt() is unsupported there). This guard is called synchronously by
+  // selectDoc / selectFolder / switchTab / closeTab and their many callers;
+  // routing them all through the async uiConfirm would require awaiting at every
+  // call site, so we keep this one synchronous.
   function confirmDiscardEdits() {
     if (!state.editor) return true;
     if (!isEditorDirty()) { destroyEditor(); return true; }
@@ -1675,7 +1784,7 @@
   async function startEditing(doc) {
     if (!doc) return;
     if (typeof toastui === 'undefined' || !toastui.Editor) {
-      alert('Editor failed to load — check network/CDN access.');
+      uiAlert('Editor failed to load — check network/CDN access.');
       return;
     }
     if (state.editor && !confirmDiscardEdits()) return;
@@ -1686,7 +1795,7 @@
       if (!r.ok) throw new Error('HTTP ' + r.status);
       text = await r.text();
     } catch (err) {
-      alert('Failed to load file: ' + err.message);
+      uiAlert('Failed to load file: ' + err.message);
       return;
     }
 
@@ -2909,8 +3018,8 @@
     const actions = el('div', { class: 'doc-edit-stale-actions' });
     if (!opts.deleted) {
       const reloadBtn = el('button', { class: 'doc-edit-stale-reload' }, 'Reload from disk');
-      reloadBtn.addEventListener('click', () => {
-        if (!confirm('Discard your unsaved edits and reload from disk?')) return;
+      reloadBtn.addEventListener('click', async () => {
+        if (!(await uiConfirm('Discard your unsaved edits and reload from disk?', { title: 'Discard edits', kind: 'danger' }))) return;
         const doc = state.editorDoc;
         if (!doc) return;
         destroyEditor();
@@ -3477,7 +3586,7 @@
       persistMcPanes();
     } catch (err) {
       setStatus('move failed', 'error');
-      alert('Move failed: ' + err.message);
+      uiAlert('Move failed: ' + err.message);
     }
   }
 
@@ -3699,9 +3808,10 @@
   // Both wait for the SSE-driven reindex to refresh the tree/viewer. We don't
   // optimistically patch state — the server-side index is the source of truth.
   async function renameNode(prefixedPath, currentName, isFolder) {
-    const newName = window.prompt(
+    const newName = await uiPrompt(
       `Rename ${isFolder ? 'folder' : 'file'} "${currentName}" to:`,
-      currentName
+      currentName,
+      { title: 'Rename' }
     );
     if (newName == null) return; // user cancelled
     const trimmed = newName.trim();
@@ -3729,15 +3839,16 @@
         });
       }
     } catch (err) {
-      alert('Rename failed: ' + err.message);
+      uiAlert('Rename failed: ' + err.message);
     }
   }
 
   async function deleteNode(prefixedPath, name, isFolder) {
     const trashWord = (navigator.platform || '').includes('Mac') ? 'Trash' : 'trash';
-    const ok = window.confirm(
+    const ok = await uiConfirm(
       `Move ${isFolder ? 'folder' : 'file'} "${name}" to ${trashWord}?` +
-      (isFolder ? '\n\nAll files inside will be moved with it.' : '')
+      (isFolder ? '\n\nAll files inside will be moved with it.' : ''),
+      { title: 'Move to ' + trashWord, kind: 'danger' }
     );
     if (!ok) return;
     try {
@@ -3753,7 +3864,7 @@
       // also show the "this doc was removed" empty state if the user was
       // viewing the deleted file.
     } catch (err) {
-      alert('Delete failed: ' + err.message);
+      uiAlert('Delete failed: ' + err.message);
     }
   }
 
@@ -3816,7 +3927,7 @@
       });
     } catch (err) {
       setStatus('paste failed', 'error');
-      alert('Paste failed: ' + err.message);
+      uiAlert('Paste failed: ' + err.message);
     }
   }
 
@@ -3861,7 +3972,7 @@
   }
 
   async function createFolderIn(parentPath) {
-    const name = window.prompt('New folder name:', '');
+    const name = await uiPrompt('New folder name:', '', { title: 'New folder', placeholder: 'folder-name' });
     if (name == null) return;
     const trimmed = name.trim();
     if (!trimmed) return;
@@ -3882,12 +3993,12 @@
       state.mcPanes.b.expanded.add(parentPath); state.mcPanes.b.expanded.add(data.path);
       persistMcPanes();
     } catch (err) {
-      alert('Create folder failed: ' + err.message);
+      uiAlert('Create folder failed: ' + err.message);
     }
   }
 
   async function createMarkdownIn(parentPath) {
-    const name = window.prompt('New markdown file (`.md` will be added if omitted):', '');
+    const name = await uiPrompt('New markdown file (`.md` will be added if omitted):', '', { title: 'New file', placeholder: 'notes.md' });
     if (name == null) return;
     const trimmed = name.trim();
     if (!trimmed) return;
@@ -3919,7 +4030,7 @@
         }
       });
     } catch (err) {
-      alert('Create file failed: ' + err.message);
+      uiAlert('Create file failed: ' + err.message);
     }
   }
 
@@ -4007,7 +4118,6 @@
     $('#tree-collapse-all').addEventListener('click', collapseAllFolders);
     applyTreeDisplayMode();
     $('#tree-display-toggle').addEventListener('click', toggleTreeDisplay);
-    $('#reindex').addEventListener('click', doReindex);
     $('#quick-open').addEventListener('click', (ev) => {
       if (ev.target.id === 'quick-open') closeQuickOpen();
     });
@@ -4385,7 +4495,7 @@
     });
     if (!r.ok) {
       const j = await r.json().catch(() => ({}));
-      alert('Init failed: ' + (j.error || r.status));
+      uiAlert('Init failed: ' + (j.error || r.status));
       return;
     }
     await gh.refresh();
@@ -4408,7 +4518,7 @@
       });
       if (!r.ok) {
         const j = await r.json().catch(() => ({}));
-        alert('Commit failed: ' + (j.error || r.status));
+        uiAlert('Commit failed: ' + (j.error || r.status));
       }
     } finally {
       btn.disabled = false; btn.textContent = orig;
@@ -4425,7 +4535,7 @@
       });
       if (!r.ok) {
         const j = await r.json().catch(() => ({}));
-        alert('Push failed: ' + (j.error || r.status));
+        uiAlert('Push failed: ' + (j.error || r.status));
       }
     } finally {
       btn.disabled = false; btn.textContent = orig;
@@ -4442,7 +4552,7 @@
       });
       if (!r.ok) {
         const j = await r.json().catch(() => ({}));
-        alert('Pull failed: ' + (j.error || r.status));
+        uiAlert('Pull failed: ' + (j.error || r.status));
       }
     } finally {
       btn.disabled = false; btn.textContent = orig;
@@ -4451,9 +4561,9 @@
   };
 
   gh.promptCreateRepo = async function promptCreateRepo(root) {
-    const name = prompt('Repo name on GitHub:', root.name.toLowerCase().replace(/[^a-z0-9-_]/g, '-'));
+    const name = await uiPrompt('Repo name on GitHub:', root.name.toLowerCase().replace(/[^a-z0-9-_]/g, '-'), { title: 'Create GitHub repo' });
     if (!name) return;
-    const isPriv = confirm('Make this repo private? (Cancel = public)');
+    const isPriv = await uiConfirm('Make this repo private? (Cancel = public)', { title: 'Repo visibility' });
     try {
       const r = await fetch('/api/github/repo/create', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
@@ -4469,12 +4579,12 @@
       await gh.setConfig(root.name, { repo: j.fullName });
       await gh.refresh();
     } catch (err) {
-      alert('Create failed: ' + err.message);
+      uiAlert('Create failed: ' + err.message);
     }
   };
 
   gh.promptAttachRepo = async function promptAttachRepo(root) {
-    const url = prompt('GitHub repo URL (https://github.com/owner/repo.git):');
+    const url = await uiPrompt('GitHub repo URL (https://github.com/owner/repo.git):', '', { title: 'Attach GitHub repo', placeholder: 'https://github.com/owner/repo.git' });
     if (!url) return;
     try {
       await fetch('/api/git/init', {
@@ -4486,7 +4596,7 @@
       if (m) await gh.setConfig(root.name, { repo: m[1] + '/' + m[2] });
       await gh.refresh();
     } catch (err) {
-      alert('Attach failed: ' + err.message);
+      uiAlert('Attach failed: ' + err.message);
     }
   };
 
