@@ -1612,15 +1612,20 @@ a.agent-file-link:hover { border-bottom-style: solid; }
   line-height: 1.4;
 }
 .agent-input:focus { outline: none; border-color: var(--tp-accent); }
-.agent-send, .agent-stop {
-  height: 32px; padding: 0 14px;
+/* one button that is Send when idle and Stop while a turn runs */
+.agent-submit {
+  height: 32px; width: 38px; padding: 0;
   border: 1px solid var(--tp-accent); border-radius: 6px;
   background: var(--tp-accent); color: var(--tp-on-accent);
-  font-size: 12.5px; font-weight: 600; cursor: pointer;
-  flex: 0 0 auto;
+  cursor: pointer; flex: 0 0 auto;
+  display: inline-flex; align-items: center; justify-content: center;
 }
-.agent-send:disabled { opacity: 0.45; cursor: default; }
-.agent-stop { background: transparent; color: var(--tp-err); border-color: var(--tp-err); }
+.agent-submit:disabled { opacity: 0.45; cursor: default; }
+.agent-submit .as-icon { display: none; }
+.agent-submit .as-send { display: block; }
+.agent-submit.is-running { background: var(--tp-err); border-color: var(--tp-err); color: #fff; }
+.agent-submit.is-running .as-send { display: none; }
+.agent-submit.is-running .as-stop { display: block; }
 .agent-insert {
   height: 32px; width: 30px; padding: 0;
   border: 1px solid var(--tp-border); border-radius: 6px;

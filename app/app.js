@@ -2475,16 +2475,19 @@
 
   function agStartTurn() {
     agent.running = true;
-    $('#agent-send').classList.add('hidden');
-    $('#agent-stop').classList.remove('hidden');
+    agent.stopping = false;
+    const btn = $('#agent-submit');
+    btn.classList.add('is-running');
+    btn.title = 'Stop (interrupt the current turn)';
     setAgentStatus('working…', 'run');
     agShowWorking();
   }
   function agEndTurn() {
     agent.running = false;
     agHideWorking();
-    $('#agent-stop').classList.add('hidden');
-    $('#agent-send').classList.remove('hidden');
+    const btn = $('#agent-submit');
+    btn.classList.remove('is-running');
+    btn.title = 'Send (Enter)';
     setAgentStatus('ready');
     if (agent.queued) {
       const q = agent.queued;
@@ -2517,7 +2520,15 @@
       if (m.t === 'started') { agent.cwd = m.cwd || ''; setAgentStatus('starting…'); }
       else if (m.t === 'event') agHandleEvent(m.ev);
       else if (m.t === 'error') { agSystem(m.message, true); agEndTurn(); }
-      else if (m.t === 'exit') { agSystem('Session ended (code ' + (m.code == null ? '?' : m.code) + '). Click Restart.', m.code !== 0 && m.code != null); agEndTurn(); setAgentStatus('ended'); }
+      else if (m.t === 'exit') {
+        if (agent.stopping) {
+          agent.stopping = false;
+          agSystem('Stopped. Send another message to continue.');
+        } else {
+          agSystem('Session ended (code ' + (m.code == null ? '?' : m.code) + '). Send a message to resume, or click Restart.', m.code !== 0 && m.code != null);
+        }
+        agEndTurn(); setAgentStatus('ready');
+      }
     };
     ws.onclose = () => { if (agent.ws === ws) { agent.ws = null; if (agent.running) agEndTurn(); } };
     ws.onerror = () => setAgentStatus('connection error', 'error');
@@ -2554,8 +2565,9 @@
   }
 
   function agStop() {
+    agent.stopping = true;   // so the resulting exit reads as a deliberate stop
     if (agent.ws && agent.ws.readyState === 1) agent.ws.send(JSON.stringify({ t: 'interrupt' }));
-    setAgentStatus('interrupting…', 'run');
+    setAgentStatus('stopping…', 'run');
   }
 
   const AGENT_INPUT_MAX = 160;
@@ -2708,8 +2720,7 @@
     $('#agent-close').addEventListener('click', closeAgent);
     $('#agent-restart').addEventListener('click', restartAgent);
     $('#agent-theme').addEventListener('click', () => applyAgentTheme(agent.theme === 'dark' ? 'light' : 'dark'));
-    $('#agent-send').addEventListener('click', agSendFromComposer);
-    $('#agent-stop').addEventListener('click', agStop);
+    $('#agent-submit').addEventListener('click', () => { agent.running ? agStop() : agSendFromComposer(); });
     $('#agent-insert').addEventListener('click', agentInsertPath);
     $('#agent-context').addEventListener('click', () => { if ($('#agent-context').hasAttribute('data-insertable')) agentInsertPath(); });
     const modeSel = $('#agent-mode');

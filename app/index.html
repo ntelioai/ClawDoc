@@ -209,8 +209,10 @@
         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 3h7v7"/><path d="M10 14 21 3"/><path d="M21 14v7H3V3h7"/></svg>
       </button>
       <textarea id="agent-input" class="agent-input" rows="1" placeholder="Message Claude…  (Enter to send, Shift+Enter for newline)" spellcheck="false"></textarea>
-      <button id="agent-send" class="agent-send" title="Send (Enter)">Send</button>
-      <button id="agent-stop" class="agent-stop hidden" title="Interrupt the current turn">Stop</button>
+      <button id="agent-submit" class="agent-submit" title="Send (Enter)" aria-label="Send">
+        <svg class="as-icon as-send" viewBox="0 0 15 15" width="16" height="16" fill="currentColor" xmlns="http://www.w3.org/2000/svg"><path fill-rule="evenodd" clip-rule="evenodd" d="M7.5 0.792892L11.8536 5.14645L11.1464 5.85355L8 2.70711V12H7V2.70711L3.85355 5.85355L3.14645 5.14645L7.5 0.792892ZM14 13V14H1V13H14Z"/></svg>
+        <svg class="as-icon as-stop" viewBox="-5.5 0 32 32" width="15" height="15" fill="currentColor" xmlns="http://www.w3.org/2000/svg"><path d="M0 6.563v18.875c0 0.531 0.438 0.969 0.969 0.969h18.875c0.531 0 0.969-0.438 0.969-0.969v-18.875c0-0.531-0.438-0.969-0.969-0.969h-18.875c-0.531 0-0.969 0.438-0.969 0.969z"/></svg>
+      </button>
     </div>
     <div class="chat-foot">
       <span id="agent-status" class="chat-status">idle</span>
