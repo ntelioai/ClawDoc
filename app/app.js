@@ -4220,6 +4220,7 @@
     historyCommits: [],
     historyDoc: null,
     historyActiveOid: null,
+    historyMaximized: false, // remembered across opens within the session
   };
 
   gh.init = function init() {
@@ -4234,6 +4235,11 @@
     });
     const histClose = $('#history-close');
     if (histClose) histClose.addEventListener('click', closeHistoryModal);
+    const histMax = $('#history-maximize');
+    if (histMax) {
+      histMax.innerHTML = ICON_FULLSCREEN;
+      histMax.addEventListener('click', toggleHistoryMaximize);
+    }
     const histModal = $('#history-modal');
     if (histModal) histModal.addEventListener('click', (ev) => {
       if (ev.target.id === 'history-modal') closeHistoryModal();
@@ -4651,6 +4657,7 @@
     gh.historyActiveOid = null;
     gh.historyOpen = true;
     $('#history-modal').classList.remove('hidden');
+    applyHistoryMaximized();
     $('#history-doc').textContent = doc.path;
     $('#history-commits').innerHTML = '<div class="empty" style="padding:20px;color:var(--text-dim);font-size:13px;">Loading commits…</div>';
     $('#history-diff').innerHTML = '<div class="empty">Select a commit on the left to see what changed.</div>';
@@ -4738,6 +4745,25 @@
   function closeHistoryModal() {
     gh.historyOpen = false;
     $('#history-modal').classList.add('hidden');
+  }
+
+  // Reflect gh.historyMaximized onto the modal + the toggle button. Kept in one
+  // place so openHistory() can re-apply the remembered state on each open.
+  function applyHistoryMaximized() {
+    const modal = $('#history-modal');
+    const btn = $('#history-maximize');
+    if (modal) modal.classList.toggle('maximized', !!gh.historyMaximized);
+    if (btn) {
+      btn.innerHTML = gh.historyMaximized ? ICON_FULLSCREEN_EXIT : ICON_FULLSCREEN;
+      const label = gh.historyMaximized ? 'Restore' : 'Maximize';
+      btn.title = label;
+      btn.setAttribute('aria-label', label);
+    }
+  }
+
+  function toggleHistoryMaximize() {
+    gh.historyMaximized = !gh.historyMaximized;
+    applyHistoryMaximized();
   }
 
   function relativeTime(d) {
