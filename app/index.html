@@ -183,17 +183,17 @@
       <span id="chat-status" class="chat-status">starting…</span>
     </div>
   </aside>
-  <aside id="agent-panel" class="agent-panel hidden" data-term-theme="dark">
+  <aside id="agent-panel" class="agent-panel hidden" data-term-theme="light">
     <div id="agent-resizer" class="chat-resizer" title="Drag to resize"></div>
     <div class="chat-head">
       <div class="chat-title">Claude ✦</div>
       <div id="agent-context" class="chat-context"></div>
       <div class="chat-head-actions">
-        <select id="agent-mode" class="agent-mode" title="Permission mode for this session">
-          <option value="default">default</option>
-          <option value="plan">plan</option>
-          <option value="acceptEdits">acceptEdits</option>
-          <option value="bypassPermissions">bypass</option>
+        <select id="agent-mode" class="agent-mode" title="How Claude handles edits in this session. Changing it restarts the conversation.">
+          <option value="acceptEdits">Edit automatically</option>
+          <option value="default">Ask before edits</option>
+          <option value="plan">Plan mode</option>
+          <option value="bypassPermissions">Auto (no prompts)</option>
         </select>
         <button id="agent-theme" title="Toggle theme (dark/light)" aria-label="Toggle theme">
           <svg class="theme-icon theme-icon-dark" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>

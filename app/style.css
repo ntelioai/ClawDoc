@@ -1362,47 +1362,53 @@ mark.hl { background: #ffe9a8; color: inherit; padding: 0 1px; border-radius: 2p
 .chat-status.run { color: var(--tp-accent); }
 
 /* ---------- rich Claude client (#agent-panel) ----------
-   Reuses the .chat-* chrome classes and the --tp-* theme vars so dark/light
-   parity comes for free. Docks on the right like the PTY panel; when both are
-   open the PTY panel shifts left of it (body.both-claude + --agent-w). */
+   A clean neutral palette: white background, grey chrome, blue accent. Light is
+   the default; [data-term-theme="dark"] swaps to a slate-blue dark variant.
+   Docks on the right like the PTY panel; when both are open the PTY panel
+   shifts left of it (body.both-claude + --agent-w). */
 .agent-panel {
-  --tp-bg: #1d1f21;
-  --tp-chrome-bg: #16181a;
-  --tp-border: #2c2f33;
-  --tp-fg: #e6e1cf;
-  --tp-muted: #8a8a8a;
-  --tp-accent: #f0c674;
-  --tp-btn-bg: #1d1f21;
-  --tp-btn-fg: #b8b8b8;
-  --tp-btn-hover-fg: #ffffff;
-  --tp-err: #e06c75;
-  --tp-card: #232629;
-  --tp-card-border: #34383d;
+  /* light (default) — white / grey / blue */
+  --tp-bg: #ffffff;
+  --tp-chrome-bg: #f4f6f8;
+  --tp-border: #e3e8ee;
+  --tp-fg: #1f2933;
+  --tp-muted: #6b7785;
+  --tp-accent: #2563eb;
+  --tp-accent-soft: rgba(37, 99, 235, 0.10);
+  --tp-btn-bg: #ffffff;
+  --tp-btn-fg: #3b4754;
+  --tp-btn-hover-fg: #2563eb;
+  --tp-err: #dc2626;
+  --tp-card: #f7f9fc;
+  --tp-card-border: #e3e8ee;
+  --tp-on-accent: #ffffff;
   position: fixed;
   top: 52px; right: 0; bottom: 0;
   width: 620px;
   background: var(--tp-bg);
   border-left: 1px solid var(--border);
-  box-shadow: -4px 0 16px rgba(0,0,0,0.18);
+  box-shadow: -4px 0 16px rgba(15, 23, 42, 0.10);
   display: flex;
   flex-direction: column;
   z-index: 61;
   transition: transform 0.18s ease;
 }
-.agent-panel[data-term-theme="light"] {
-  --tp-bg: #fdf6e3;
-  --tp-chrome-bg: #eee8d5;
-  --tp-border: #d8d1bd;
-  --tp-fg: #3a4d52;
-  --tp-muted: #93a1a1;
-  --tp-accent: #cb4b16;
-  --tp-btn-bg: #fdf6e3;
-  --tp-btn-fg: #586e75;
-  --tp-btn-hover-fg: #002b36;
-  --tp-err: #dc322f;
-  --tp-card: #fbf3df;
-  --tp-card-border: #ded3b8;
-  box-shadow: -4px 0 16px rgba(0,0,0,0.08);
+.agent-panel[data-term-theme="dark"] {
+  --tp-bg: #1b2330;
+  --tp-chrome-bg: #141b26;
+  --tp-border: #2b3647;
+  --tp-fg: #e5e9f0;
+  --tp-muted: #8a97a8;
+  --tp-accent: #60a5fa;
+  --tp-accent-soft: rgba(96, 165, 250, 0.14);
+  --tp-btn-bg: #1f2937;
+  --tp-btn-fg: #b9c2cf;
+  --tp-btn-hover-fg: #ffffff;
+  --tp-err: #f87171;
+  --tp-card: #232d3c;
+  --tp-card-border: #2f3b4d;
+  --tp-on-accent: #0b1220;
+  box-shadow: -4px 0 16px rgba(0,0,0,0.30);
 }
 .agent-panel.hidden { transform: translateX(110%); pointer-events: none; }
 /* When both Claude panels are open, the PTY panel sits left of the rich one. */
@@ -1442,6 +1448,24 @@ body.both-claude #chat-panel { right: var(--agent-w, 620px); box-shadow: none; }
 .agent-empty { color: var(--tp-muted); font-size: 12px; text-align: center; margin: auto; padding: 24px; max-width: 320px; }
 .agent-empty code { font-family: var(--font-mono); color: var(--tp-accent); }
 
+/* "Claude is working…" indicator */
+.agent-working {
+  display: flex; align-items: center; gap: 9px;
+  padding: 7px 11px;
+  color: var(--tp-muted);
+  font-size: 12px;
+}
+.aw-dots { display: inline-flex; gap: 4px; }
+.aw-dots span {
+  width: 6px; height: 6px; border-radius: 50%;
+  background: var(--tp-accent);
+  display: inline-block;
+  animation: aw-pulse 1.1s ease-in-out infinite;
+}
+.aw-dots span:nth-child(2) { animation-delay: 0.18s; }
+.aw-dots span:nth-child(3) { animation-delay: 0.36s; }
+@keyframes aw-pulse { 0%, 80%, 100% { opacity: 0.25; transform: scale(0.8); } 40% { opacity: 1; transform: scale(1); } }
+
 .msg { display: flex; flex-direction: column; }
 .msg-body { border-radius: 8px; padding: 8px 11px; word-wrap: break-word; overflow-wrap: anywhere; }
 .msg-body > :first-child { margin-top: 0; }
@@ -1452,7 +1476,7 @@ body.both-claude #chat-panel { right: var(--agent-w, 620px); box-shadow: none; }
 .msg-body p { margin: 6px 0; }
 .msg-body ul, .msg-body ol { margin: 6px 0; padding-left: 20px; }
 .msg-user { align-items: flex-end; }
-.msg-user .msg-body { background: var(--tp-accent); color: #1d1f21; max-width: 85%; white-space: pre-wrap; }
+.msg-user .msg-body { background: var(--tp-accent); color: var(--tp-on-accent); max-width: 85%; white-space: pre-wrap; }
 .msg-assistant .msg-body { background: var(--tp-card); border: 1px solid var(--tp-card-border); max-width: 100%; }
 .msg-system { align-items: center; }
 .msg-system .msg-body {
@@ -1561,7 +1585,7 @@ a.agent-file-link:hover { border-bottom-style: solid; }
   background: var(--tp-btn-bg); color: var(--tp-btn-fg);
   font-size: 12px; cursor: pointer;
 }
-.perm-actions .perm-allow { background: var(--tp-accent); color: #1d1f21; border-color: var(--tp-accent); }
+.perm-actions .perm-allow { background: var(--tp-accent); color: var(--tp-on-accent); border-color: var(--tp-accent); }
 .perm-actions .perm-deny:hover { border-color: var(--tp-err); color: var(--tp-err); }
 .perm-prompt.answered { opacity: 0.6; }
 .perm-prompt.answered .perm-actions { display: none; }
@@ -1590,7 +1614,7 @@ a.agent-file-link:hover { border-bottom-style: solid; }
 .agent-send, .agent-stop {
   height: 32px; padding: 0 14px;
   border: 1px solid var(--tp-accent); border-radius: 6px;
-  background: var(--tp-accent); color: #1d1f21;
+  background: var(--tp-accent); color: var(--tp-on-accent);
   font-size: 12.5px; font-weight: 600; cursor: pointer;
   flex: 0 0 auto;
 }

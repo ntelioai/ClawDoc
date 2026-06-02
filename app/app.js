@@ -2087,6 +2087,12 @@
   // Independent of the PTY panel (`chat`) above — both can be open at once so
   // the two can be compared. Event shapes: docs/roadmap/stream-json-notes.md.
   const AGENT_THEME_KEY = 'clawdoc:agentTheme';
+  const MODE_LABELS = {
+    acceptEdits: 'Edit automatically',
+    default: 'Ask before edits',
+    plan: 'Plan mode',
+    bypassPermissions: 'Auto (no prompts)',
+  };
   const agent = {
     open: false,
     ws: null,
@@ -2095,14 +2101,18 @@
     sessionId: '',         // captured from system/init, used for --resume
     cwd: '',               // absolute cwd reported by the server (for path links)
     running: false,        // a turn is in flight
-    mode: 'default',
+    // Default to auto-accepting edits so the common "make me a file" case works.
+    // (The installed CLI has no headless permission-prompt mechanism, so the
+    // "Ask before edits" / default mode can't show a prompt — it just denies.)
+    mode: 'acceptEdits',
     activeAssistant: null, // current streaming assistant .msg-body element
     activeText: '',        // accumulated markdown for the active assistant block
     toolCards: {},         // tool_use id -> { card, result }
     queued: '',            // message typed while a turn was running
+    working: null,         // the "Claude is working…" indicator element
     theme: (() => {
-      try { return localStorage.getItem(AGENT_THEME_KEY) === 'light' ? 'light' : 'dark'; }
-      catch { return 'dark'; }
+      try { return localStorage.getItem(AGENT_THEME_KEY) === 'dark' ? 'dark' : 'light'; }
+      catch { return 'light'; }
     })(),
   };
 
@@ -2132,6 +2142,7 @@
     const stick = agNearBottom();
     agClearEmpty();
     agLog().appendChild(node);
+    agBumpWorking();   // keep the "working…" row at the very bottom
     agScroll(stick);
   }
 
@@ -2240,23 +2251,26 @@
       el('span', { class: 'tool-chevron', html: '<svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 6 15 12 9 18"/></svg>' }),
     ]);
     const bodyEl = el('div', { class: 'tool-card-body' });
-    // input detail
-    let inputStr = '';
-    try { inputStr = JSON.stringify(block.input, null, 1); } catch {}
-    if (inputStr && inputStr !== '{}') bodyEl.appendChild(el('div', { class: 'tool-input' }, inputStr));
-    // diff for Edit/Write (M5)
+    // For Edit/Write/MultiEdit, the diff IS the readable view — don't also dump
+    // the raw input JSON (which duplicated the whole file content and was the
+    // unreadable "json blob" in the feedback). For other tools, show a compact
+    // input block, collapsed inside the card.
     const diff = agBuildDiff(name, block.input);
     if (diff) {
       const host = el('div', { class: 'tool-diff' });
       bodyEl.appendChild(host);
       try { new window.Diff2HtmlUI(host, diff, { drawFileList: false, matching: 'lines', outputFormat: 'line-by-line' }).draw(); }
       catch { host.remove(); }
+    } else {
+      let inputStr = '';
+      try { inputStr = JSON.stringify(block.input, null, 1); } catch {}
+      if (inputStr && inputStr !== '{}') bodyEl.appendChild(el('div', { class: 'tool-input' }, inputStr));
     }
     head.addEventListener('click', () => card.classList.toggle('open'));
     card.appendChild(head);
     card.appendChild(bodyEl);
-    // Edit/Write start expanded so the diff is visible; others collapsed.
-    if (diff) card.classList.add('open');
+    // Everything starts collapsed (a clean list of what Claude did); click any
+    // card header to expand its diff/result. The chevron signals it's clickable.
     agent.toolCards[block.id] = { card, bodyEl, name };
     agAppend(card);
     agent.activeAssistant = null; // a tool ends the current text bubble
@@ -2360,7 +2374,8 @@
     if (!ev || !ev.type) return;
     if (ev.type === 'system' && ev.subtype === 'init') {
       if (ev.session_id) agent.sessionId = ev.session_id;
-      setAgentStatus('ready · ' + (ev.model || '') + ' · ' + (ev.permissionMode || agent.mode));
+      const pm = ev.permissionMode || agent.mode;
+      setAgentStatus('ready · ' + (ev.model || '') + ' · ' + (MODE_LABELS[pm] || pm));
       return;
     }
     if (ev.type === 'rate_limit_event') return;
@@ -2393,9 +2408,7 @@
       agEndTurn();
       if (ev.session_id) agent.sessionId = ev.session_id;
       const denials = ev.permission_denials || [];
-      for (const d of denials) {
-        agSystem('Permission denied: ' + (d.tool_name || 'tool'), true);
-      }
+      if (denials.length) agDenialNotice(denials);
       if (ev.is_error) agSystem('Turn ended with an error' + (ev.subtype ? ' (' + ev.subtype + ')' : ''), true);
       return;
     }
@@ -2416,14 +2429,60 @@
       el('div', { class: 'msg-body' }, text)));
   }
 
+  // One clear, actionable card when Claude was blocked from acting — instead of
+  // raw "Permission denied" notices. Offers a one-click switch to auto-edit.
+  function agDenialNotice(denials) {
+    const tools = [...new Set(denials.map(d => d.tool_name || 'a tool'))].join(', ');
+    const box = el('div', { class: 'perm-prompt' });
+    box.appendChild(el('div', { class: 'perm-title' }, '✋ Claude needs permission to use ' + tools));
+    box.appendChild(el('div', { class: 'perm-detail' },
+      'The current mode is “Ask before edits”, which can’t show an approval prompt in this panel, so the action was blocked. Switch to “Edit automatically” to let Claude proceed.'));
+    const actions = el('div', { class: 'perm-actions' }, [
+      el('button', {
+        class: 'perm-allow',
+        onclick: () => {
+          agent.mode = 'acceptEdits';
+          const sel = $('#agent-mode'); if (sel) sel.value = 'acceptEdits';
+          box.classList.add('answered');
+          restartAgent();
+          agSystem('Switched to “Edit automatically”. Re-send your request.');
+        },
+      }, 'Switch to Edit automatically'),
+    ]);
+    box.appendChild(actions);
+    agAppend(box);
+  }
+
+  // A visible "Claude is working…" row pinned to the bottom of the log while a
+  // turn runs, so it's obvious the AI is busy (status text alone was too quiet).
+  function agShowWorking() {
+    if (agent.working) return;
+    agent.working = el('div', { class: 'agent-working' }, [
+      el('span', { class: 'aw-dots', html: '<span></span><span></span><span></span>' }),
+      el('span', { class: 'aw-label' }, 'Claude is working…'),
+    ]);
+    agClearEmpty();
+    agLog().appendChild(agent.working);
+    agScroll(true);
+  }
+  function agHideWorking() {
+    if (agent.working) { agent.working.remove(); agent.working = null; }
+  }
+  // Keep the working row last as new messages stream in.
+  function agBumpWorking() {
+    if (agent.working && agent.working.parentNode) agLog().appendChild(agent.working);
+  }
+
   function agStartTurn() {
     agent.running = true;
     $('#agent-send').classList.add('hidden');
     $('#agent-stop').classList.remove('hidden');
-    setAgentStatus('thinking…', 'run');
+    setAgentStatus('working…', 'run');
+    agShowWorking();
   }
   function agEndTurn() {
     agent.running = false;
+    agHideWorking();
     $('#agent-stop').classList.add('hidden');
     $('#agent-send').classList.remove('hidden');
     setAgentStatus('ready');
