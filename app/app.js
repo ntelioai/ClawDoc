@@ -2565,50 +2565,55 @@
     ta.style.height = Math.min(160, ta.scrollHeight) + 'px';
   }
 
-  // ---- context / @-insert (mirror of the PTY panel's logic) ----
-  function agentInsertablePath() {
+  // ---- context / @-insert ----
+  // The session can access every mounted workspace (server adds --add-dir for
+  // all roots), so any selected file is insertable: a path relative to the
+  // session's cwd root when it lives there, an absolute path otherwise.
+  function rootAbsPath(workspaceName) {
+    const roots = (state.index && state.index.roots) || [];
+    const r = roots.find(x => x.name === workspaceName);
+    return r ? r.path : '';
+  }
+  // Returns { insert, display } for the current selection, or null if nothing
+  // is selected / the path can't be resolved.
+  function agentInsertInfo() {
     const full = state.currentDoc ? state.currentDoc.path
                : state.currentFolder ? state.currentFolder : '';
     if (!full) return null;
     const { workspace, rel } = splitWorkspacePath(full);
-    if (!agent.sessionWorkspace || workspace !== agent.sessionWorkspace) return null;
-    return rel || '.';
+    const isFolder = !state.currentDoc;
+    const slash = isFolder ? '/' : '';
+    if (agent.sessionWorkspace && workspace === agent.sessionWorkspace) {
+      const r = rel || '.';
+      return { insert: r, display: r + slash };
+    }
+    const abs = rootAbsPath(workspace);
+    if (!abs) return null;
+    const p = rel ? abs + '/' + rel : abs;
+    return { insert: p, display: p + slash };
   }
   function updateAgentContext() {
     const ctx = $('#agent-context');
     const insertBtn = $('#agent-insert');
     if (!ctx) return;
-    const full = state.currentDoc ? state.currentDoc.path
-               : state.currentFolder ? state.currentFolder : '';
-    if (!full) {
+    const info = agentInsertInfo();
+    if (!info) {
       ctx.textContent = '';
       ctx.removeAttribute('data-insertable');
-      if (insertBtn) insertBtn.disabled = true;
+      ctx.removeAttribute('title');
+      if (insertBtn) { insertBtn.disabled = true; insertBtn.title = 'Select a file or folder in the tree first'; }
       return;
     }
-    const { workspace, rel } = splitWorkspacePath(full);
-    const isFolder = !state.currentDoc;
-    const showRel = (rel || '.') + (isFolder ? '/' : '');
-    const matches = agent.sessionWorkspace && workspace === agent.sessionWorkspace;
-    if (matches) {
-      ctx.textContent = '@' + showRel;
-      ctx.setAttribute('data-insertable', '1');
-      ctx.title = 'Click to insert “@' + showRel + '” into the composer';
-      if (insertBtn) { insertBtn.disabled = false; insertBtn.title = 'Insert “@' + showRel + '”'; }
-    } else {
-      ctx.textContent = full + (isFolder ? '/' : '');
-      ctx.removeAttribute('data-insertable');
-      ctx.title = agent.sessionWorkspace
-        ? 'Selection is in "' + workspace + '" but the session is rooted in "' + agent.sessionWorkspace + '". Restart to switch.'
-        : full;
-      if (insertBtn) insertBtn.disabled = true;
-    }
+    ctx.textContent = '@' + info.display;
+    ctx.setAttribute('data-insertable', '1');
+    ctx.title = 'Click to add “@' + info.display + '” to your message';
+    if (insertBtn) { insertBtn.disabled = false; insertBtn.title = 'Add “@' + info.display + '” to your message'; }
   }
   function agentInsertPath() {
-    const rel = agentInsertablePath();
-    if (!rel) return;
+    const info = agentInsertInfo();
+    if (!info) return;
     const ta = $('#agent-input');
-    const ins = '@' + rel + ' ';
+    const ins = '@' + info.insert + ' ';
     ta.value = ta.value + (ta.value && !ta.value.endsWith(' ') ? ' ' : '') + ins;
     ta.focus();
     autoGrowAgentInput();

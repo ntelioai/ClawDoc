@@ -1221,6 +1221,11 @@ function attachAgent(ws, query) {
   // `result` event ends a turn, not the session.
   const args = ['--input-format', 'stream-json', '--output-format', 'stream-json',
     '--verbose', '-p', '--permission-mode', mode];
+  // Grant the session access to every mounted workspace, not just its cwd root,
+  // so the user can @-reference a file from any folder in the tree (the rich
+  // panel inserts an absolute path for files outside the cwd root).
+  const extraDirs = ROOTS.map(r => r.path).filter(p => p && p !== cwd);
+  if (extraDirs.length) args.push('--add-dir', ...extraDirs);
   const resume = ((query && query.resume) || '').trim();
   if (/^[A-Za-z0-9-]{8,}$/.test(resume)) args.push('--resume', resume);
 
