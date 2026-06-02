@@ -4718,11 +4718,16 @@
         return;
       }
       host.innerHTML = '';
+      // line-by-line (not side-by-side): one line-number column suits the narrow
+      // History modal better than two cramped side-by-side panes, and matches the
+      // rich-client tool-diff. NOTE: this alone does not fix the gutter-overflow
+      // bug (issue #23) — diff2html's gutters are position:absolute in both
+      // formats; the actual fix is `.history-diff { position: relative }` in
+      // style.css, which makes the scroll pane their containing block.
       const ui = new window.Diff2HtmlUI(host, j.patch, {
         drawFileList: false,
         matching: 'lines',
-        outputFormat: 'side-by-side',
-        synchronisedScroll: true,
+        outputFormat: 'line-by-line',
       });
       ui.draw();
     } catch (err) {
