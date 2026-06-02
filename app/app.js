@@ -559,6 +559,7 @@
     renderFolder(folderPath);
     if (pushHash) updateHash();
     if (typeof updateChatContext === 'function') updateChatContext();
+    if (typeof updateAgentContext === 'function') updateAgentContext();
   }
 
   function selectDoc(docPath, pushHash = true, anchor = '') {
@@ -580,6 +581,7 @@
     renderDoc(doc, anchor);
     if (pushHash) updateHash(anchor);
     if (typeof updateChatContext === 'function') updateChatContext();
+    if (typeof updateAgentContext === 'function') updateAgentContext();
   }
 
   function buildHash(anchor) {
@@ -1252,6 +1254,9 @@
       // When the terminal has focus, Esc belongs to Claude (interrupt) — don't
       // hijack it to close the panel.
       if (chat.open && !inField && !isTerminalFocused()) { closeChat(); return; }
+      // Esc while the composer is focused interrupts the turn; otherwise closes.
+      if (agent.open && isAgentFocused()) { if (agent.running) { agStop(); return; } }
+      if (agent.open && !inField && !isAgentFocused()) { closeAgent(); return; }
       if (state.mcMode && !inField) { exitMcMode(); return; }
       if ($('#tree-filter').value) { $('#tree-filter').value = ''; state.treeFilter = ''; renderTree(); return; }
     }
@@ -2075,6 +2080,686 @@
       try { chat.fit && chat.fit.fit(); } catch {}
       sendResize();
     });
+  }
+
+  // ---------- rich Claude client (#agent-panel) ----------
+  // A structured front-end over `claude` in stream-json mode (server: /agent).
+  // Independent of the PTY panel (`chat`) above — both can be open at once so
+  // the two can be compared. Event shapes: docs/roadmap/stream-json-notes.md.
+  const AGENT_THEME_KEY = 'clawdoc:agentTheme';
+  const MODE_LABELS = {
+    acceptEdits: 'Edit automatically',
+    default: 'Ask before edits',
+    plan: 'Plan mode',
+    bypassPermissions: 'Auto (no prompts)',
+  };
+  const agent = {
+    open: false,
+    ws: null,
+    initialized: false,
+    sessionWorkspace: '',  // top-level workspace name the session is rooted in
+    sessionId: '',         // captured from system/init, used for --resume
+    model: '',             // captured from system/init, shown in the ready status
+    cwd: '',               // absolute cwd reported by the server (for path links)
+    running: false,        // a turn is in flight
+    // Default to auto-accepting edits so the common "make me a file" case works.
+    // (The installed CLI has no headless permission-prompt mechanism, so the
+    // "Ask before edits" / default mode can't show a prompt — it just denies.)
+    mode: 'acceptEdits',
+    activeAssistant: null, // current streaming assistant .msg-body element
+    activeText: '',        // accumulated markdown for the active assistant block
+    toolCards: {},         // tool_use id -> { card, result }
+    queued: '',            // message typed while a turn was running
+    working: null,         // the "Claude is working…" indicator element
+    allowedTools: [],      // tools the user approved after a block (--allowedTools)
+    lastUserText: '',      // last message sent, for one-click retry after approval
+    theme: (() => {
+      try { return localStorage.getItem(AGENT_THEME_KEY) === 'dark' ? 'dark' : 'light'; }
+      catch { return 'light'; }
+    })(),
+  };
+
+  const agLog = () => $('#agent-log');
+
+  function agNearBottom() {
+    const l = agLog();
+    return l && (l.scrollHeight - l.scrollTop - l.clientHeight < 80);
+  }
+  function agScroll(force) {
+    const l = agLog();
+    if (l && (force || agNearBottom())) l.scrollTop = l.scrollHeight;
+  }
+  function agClear() {
+    const l = agLog();
+    if (l) l.innerHTML = '<div class="agent-empty">Structured Claude session. Type below to start. '
+      + 'This is the rich client — the <code>Claude</code> button is the PTY terminal.</div>';
+    agent.activeAssistant = null;
+    agent.activeText = '';
+    agent.toolCards = {};
+  }
+  function agClearEmpty() {
+    const e = agLog() && agLog().querySelector('.agent-empty');
+    if (e) e.remove();
+  }
+  function agAppend(node) {
+    const stick = agNearBottom();
+    agClearEmpty();
+    agLog().appendChild(node);
+    agBumpWorking();   // keep the "working…" row at the very bottom
+    agScroll(stick);
+  }
+
+  function setAgentStatus(msg, kind) {
+    const s = $('#agent-status');
+    if (!s) return;
+    s.textContent = msg || '';
+    s.className = 'chat-status' + (kind ? ' ' + kind : '');
+  }
+
+  // Render markdown into a .msg-body and turn workspace file paths into links.
+  function agMarkdownBody(text) {
+    const body = el('div', { class: 'msg-body' });
+    try { body.innerHTML = window.marked.parse(text || '', { gfm: true, breaks: false, mangle: false, headerIds: false }); }
+    catch { body.textContent = text || ''; }
+    linkifyPaths(body);
+    return body;
+  }
+
+  // Resolve a path token from Claude's output to an index doc path, or null.
+  function agResolveDoc(token) {
+    let p = token;
+    if (agent.cwd && p.startsWith(agent.cwd + '/')) p = p.slice(agent.cwd.length + 1);
+    else if (p.startsWith('/')) return null;            // absolute, outside cwd
+    const full = (agent.sessionWorkspace ? agent.sessionWorkspace + '/' : '') + p.replace(/^\.\//, '');
+    return state.docsByPath.has(full) ? full : null;
+  }
+
+  const PATH_RE = /((?:[\w.\-]+\/)*[\w.\-]+\.(?:md|markdown|html?|pdf|txt|json|csv|js|ts|css))(?::(\d+))?/g;
+  function linkifyPaths(root) {
+    const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, null);
+    const targets = [];
+    let n;
+    while ((n = walker.nextNode())) {
+      const p = n.parentNode;
+      if (!p) continue;
+      const tag = p.nodeName;
+      if (tag === 'A' || tag === 'CODE' || tag === 'PRE') continue;
+      if (PATH_RE.test(n.nodeValue)) targets.push(n);
+      PATH_RE.lastIndex = 0;
+    }
+    for (const node of targets) {
+      const frag = document.createDocumentFragment();
+      let last = 0;
+      const s = node.nodeValue;
+      let m;
+      PATH_RE.lastIndex = 0;
+      while ((m = PATH_RE.exec(s))) {
+        const full = agResolveDoc(m[1]);
+        if (!full) continue;
+        if (m.index > last) frag.appendChild(document.createTextNode(s.slice(last, m.index)));
+        const a = el('a', { class: 'agent-file-link', title: 'Open in ClawDoc' }, m[0]);
+        a.addEventListener('click', (ev) => { ev.preventDefault(); selectDoc(full); });
+        frag.appendChild(a);
+        last = m.index + m[0].length;
+      }
+      if (last > 0) {
+        if (last < s.length) frag.appendChild(document.createTextNode(s.slice(last)));
+        node.parentNode.replaceChild(frag, node);
+      }
+    }
+  }
+
+  // ---- tool cards ----
+  const TOOL_ICONS = {
+    read: '<path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/>',
+    edit: '<path d="M12 20h9"/><path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4z"/>',
+    bash: '<polyline points="4 17 10 11 4 5"/><line x1="12" y1="19" x2="20" y2="19"/>',
+    search: '<circle cx="11" cy="11" r="7"/><line x1="21" y1="21" x2="16.65" y2="16.65"/>',
+    task: '<rect x="3" y="11" width="18" height="10" rx="2"/><circle cx="12" cy="5" r="2"/><path d="M12 7v4"/>',
+    web: '<circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3a15 15 0 0 1 0 18M12 3a15 15 0 0 0 0 18"/>',
+    todo: '<path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/>',
+    wrench: '<path d="M14.7 6.3a4 4 0 0 0-5.4 5.4L3 18v3h3l6.3-6.3a4 4 0 0 0 5.4-5.4l-2.1 2.1-2.8-.7-.7-2.8z"/>',
+  };
+  function toolIconKey(name) {
+    const n = (name || '').toLowerCase();
+    if (n === 'read' || n === 'notebookread') return 'read';
+    if (n === 'edit' || n === 'write' || n === 'multiedit' || n === 'notebookedit') return 'edit';
+    if (n === 'bash' || n === 'bashoutput' || n === 'killshell') return 'bash';
+    if (n === 'grep' || n === 'glob') return 'search';
+    if (n === 'task' || n === 'agent') return 'task';
+    if (n === 'webfetch' || n === 'websearch') return 'web';
+    if (n === 'todowrite') return 'todo';
+    return 'wrench';
+  }
+  function toolSummary(name, input) {
+    if (!input) return '';
+    const n = (name || '').toLowerCase();
+    if (input.file_path) return input.file_path;
+    if (n === 'bash') return input.command || '';
+    if (n === 'grep') return input.pattern || '';
+    if (n === 'glob') return input.pattern || '';
+    if (n === 'task') return input.description || input.subagent_type || '';
+    if (n === 'webfetch') return input.url || '';
+    if (n === 'websearch') return input.query || '';
+    try { return JSON.stringify(input).slice(0, 120); } catch { return ''; }
+  }
+  function agToolCard(block) {
+    const name = block.name || 'tool';
+    const ico = TOOL_ICONS[toolIconKey(name)] || TOOL_ICONS.wrench;
+    const card = el('div', { class: 'tool-card running' });
+    const head = el('div', { class: 'tool-card-head' }, [
+      el('span', { class: 'tool-ico', html: '<svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">' + ico + '</svg>' }),
+      el('span', { class: 'tool-name' }, name),
+      el('span', { class: 'tool-summary' }, toolSummary(name, block.input)),
+      el('span', { class: 'tool-chevron', html: '<svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 6 15 12 9 18"/></svg>' }),
+    ]);
+    const bodyEl = el('div', { class: 'tool-card-body' });
+    // For Edit/Write/MultiEdit, the diff IS the readable view — don't also dump
+    // the raw input JSON (which duplicated the whole file content and was the
+    // unreadable "json blob" in the feedback). For other tools, show a compact
+    // input block, collapsed inside the card.
+    const diff = agBuildDiff(name, block.input);
+    if (diff) {
+      const host = el('div', { class: 'tool-diff' });
+      bodyEl.appendChild(host);
+      try { new window.Diff2HtmlUI(host, diff, { drawFileList: false, matching: 'lines', outputFormat: 'line-by-line' }).draw(); }
+      catch { host.remove(); }
+    } else {
+      let inputStr = '';
+      try { inputStr = JSON.stringify(block.input, null, 1); } catch {}
+      if (inputStr && inputStr !== '{}') bodyEl.appendChild(el('div', { class: 'tool-input' }, inputStr));
+    }
+    head.addEventListener('click', () => card.classList.toggle('open'));
+    card.appendChild(head);
+    card.appendChild(bodyEl);
+    // Everything starts collapsed (a clean list of what Claude did); click any
+    // card header to expand its diff/result. The chevron signals it's clickable.
+    agent.toolCards[block.id] = { card, bodyEl, name };
+    agAppend(card);
+    agent.activeAssistant = null; // a tool ends the current text bubble
+  }
+  function agAttachResult(toolUseId, content, isError) {
+    const ref = agent.toolCards[toolUseId];
+    if (!ref) return;
+    ref.card.classList.remove('running');
+    if (isError) ref.card.classList.add('error');
+    let text = '';
+    if (typeof content === 'string') text = content;
+    else if (Array.isArray(content)) text = content.map(c => (c && c.type === 'text') ? c.text : (typeof c === 'string' ? c : '')).join('\n');
+    else if (content != null) { try { text = JSON.stringify(content, null, 1); } catch { text = String(content); } }
+    const MAX = 4000;
+    const truncated = text.length > MAX;
+    const shown = truncated ? text.slice(0, MAX) : text;
+    const result = el('div', { class: 'tool-result' + (isError ? ' is-error' : '') });
+    const rhead = el('div', { class: 'tool-result-head' }, (isError ? '⚠ result' : 'result') + ' (' + text.split('\n').length + ' lines)');
+    const rbody = el('div', { class: 'tool-result-body' }, shown);
+    if (truncated) rbody.appendChild(el('div', { class: 'tool-result-more' }, '… ' + (text.length - MAX) + ' more chars truncated'));
+    rhead.addEventListener('click', () => result.classList.toggle('open'));
+    result.appendChild(rhead);
+    result.appendChild(rbody);
+    ref.bodyEl.appendChild(result);
+  }
+
+  // Build a unified-diff string for Edit/Write so diff2html can render it.
+  function agBuildDiff(name, input) {
+    const n = (name || '').toLowerCase();
+    if (!input) return '';
+    const file = input.file_path || 'file';
+    const mk = (oldS, newS) => {
+      const o = (oldS == null || oldS === '') ? [] : String(oldS).split('\n');
+      const nw = (newS == null || newS === '') ? [] : String(newS).split('\n');
+      const oStart = o.length ? 1 : 0;
+      const nStart = nw.length ? 1 : 0;
+      const head = '--- a/' + file + '\n+++ b/' + file +
+        '\n@@ -' + oStart + ',' + o.length + ' +' + nStart + ',' + nw.length + ' @@\n';
+      const lines = o.map(l => '-' + l).concat(nw.map(l => '+' + l));
+      return head + lines.join('\n') + '\n';
+    };
+    if (n === 'edit') return mk(input.old_string, input.new_string);
+    if (n === 'write') return mk('', input.content);
+    if (n === 'multiedit' && Array.isArray(input.edits)) {
+      return input.edits.map(e => mk(e.old_string, e.new_string)).join('\n');
+    }
+    return '';
+  }
+
+  // ---- thinking + todos ----
+  function agThinking(text) {
+    if (!text) return;
+    const block = el('div', { class: 'thinking-block collapsed' });
+    const toggle = el('div', { class: 'tb-toggle' }, '✦ thinking');
+    const body = el('div', { class: 'tb-text' }, text);
+    toggle.addEventListener('click', () => block.classList.toggle('collapsed'));
+    block.appendChild(toggle);
+    block.appendChild(body);
+    agAppend(block);
+    agent.activeAssistant = null;
+  }
+  function agTodos(input) {
+    const todos = (input && input.todos) || [];
+    if (!todos.length) return;
+    const list = el('div', { class: 'todo-list' }, el('div', { class: 'todo-list-title' }, 'Todos'));
+    for (const t of todos) {
+      const box = t.status === 'completed' ? '☑' : t.status === 'in_progress' ? '◐' : '☐';
+      list.appendChild(el('div', { class: 'todo-item ' + (t.status || '') }, [
+        el('span', { class: 'ti-box' }, box),
+        el('span', {}, t.content || ''),
+      ]));
+    }
+    agAppend(list);
+    agent.activeAssistant = null;
+  }
+
+  // ---- inline permission prompt (M6, defensive — fires only if the CLI asks) ----
+  function agPermPrompt(reqId, toolName, input) {
+    const box = el('div', { class: 'perm-prompt' });
+    box.appendChild(el('div', { class: 'perm-title' }, 'Allow ' + (toolName || 'tool') + '?'));
+    let detail = '';
+    try { detail = JSON.stringify(input).slice(0, 240); } catch {}
+    if (detail) box.appendChild(el('div', { class: 'perm-detail' }, detail));
+    const decide = (decision) => {
+      if (agent.ws && agent.ws.readyState === 1) {
+        agent.ws.send(JSON.stringify({ t: 'permission', requestId: reqId, decision }));
+      }
+      box.classList.add('answered');
+      box.appendChild(el('div', { class: 'perm-detail' }, '→ ' + decision));
+    };
+    const actions = el('div', { class: 'perm-actions' }, [
+      el('button', { class: 'perm-allow', onclick: () => decide('allow') }, 'Allow'),
+      el('button', { class: 'perm-deny', onclick: () => decide('deny') }, 'Deny'),
+    ]);
+    box.appendChild(actions);
+    agAppend(box);
+  }
+
+  // ---- event dispatch ----
+  function agHandleEvent(ev) {
+    if (!ev || !ev.type) return;
+    if (ev.type === 'system' && ev.subtype === 'init') {
+      if (ev.session_id) agent.sessionId = ev.session_id;
+      if (ev.model) agent.model = ev.model;
+      if (ev.permissionMode) agent.mode = ev.permissionMode;
+      // We're mid-turn here (init only arrives after the first message), so
+      // don't flip the footer to "ready" — agEndTurn shows it when the turn ends.
+      return;
+    }
+    if (ev.type === 'rate_limit_event') return;
+    if (ev.type === 'control_request' && ev.request && ev.request.subtype === 'can_use_tool') {
+      agPermPrompt(ev.request_id, ev.request.tool_name, ev.request.input);
+      return;
+    }
+    if (ev.type === 'assistant') {
+      const blocks = (ev.message && ev.message.content) || [];
+      for (const b of blocks) {
+        if (b.type === 'thinking') agThinking(b.thinking);
+        else if (b.type === 'text') agAssistantText(b.text);
+        else if (b.type === 'tool_use') {
+          if ((b.name || '').toLowerCase() === 'todowrite') agTodos(b.input);
+          else agToolCard(b);
+        }
+      }
+      return;
+    }
+    if (ev.type === 'user') {
+      const blocks = (ev.message && ev.message.content) || [];
+      for (const b of blocks) {
+        if (b && b.type === 'tool_result') {
+          agAttachResult(b.tool_use_id, b.content, b.is_error === true);
+        }
+      }
+      return;
+    }
+    if (ev.type === 'result') {
+      agEndTurn();
+      if (ev.session_id) agent.sessionId = ev.session_id;
+      const denials = ev.permission_denials || [];
+      if (denials.length) agDenialNotice(denials);
+      if (ev.is_error) agSystem('Turn ended with an error' + (ev.subtype ? ' (' + ev.subtype + ')' : ''), true);
+      return;
+    }
+  }
+
+  function agAssistantText(text) {
+    // Skip empty / whitespace-only text blocks. Claude often emits these between
+    // tool calls; rendered, they became tiny empty bubbles — the stack of faint
+    // "horizontal lines" in the conversation.
+    if (text == null || !String(text).trim()) return;
+    // Each assistant text block is a complete chunk; append as its own bubble.
+    agent.activeText = text;
+    const body = agMarkdownBody(text);
+    const msg = el('div', { class: 'msg msg-assistant' }, body);
+    agent.activeAssistant = msg;
+    agAppend(msg);
+  }
+
+  function agSystem(text, isError) {
+    agAppend(el('div', { class: 'msg msg-system' + (isError ? ' error' : '') },
+      el('div', { class: 'msg-body' }, text)));
+  }
+
+  // One clear, actionable card when Claude was blocked from using a tool — this
+  // headless panel can't show a live approval prompt, so the tool was denied
+  // regardless of mode (acceptEdits only auto-allows edits; things like WebFetch
+  // still need approval). The fix is to pre-allow the *specific* tool for this
+  // session (--allowedTools) and retry — not to change the edit mode.
+  function agDenialNotice(denials) {
+    const tools = [...new Set(denials.map(d => d.tool_name).filter(Boolean))];
+    if (!tools.length) tools.push('a tool');
+    const list = tools.join(', ');
+    const many = tools.length > 1;
+    const box = el('div', { class: 'perm-prompt' });
+    box.appendChild(el('div', { class: 'perm-title' }, '✋ Claude needs permission to use ' + list));
+    box.appendChild(el('div', { class: 'perm-detail' },
+      'This panel can’t show a live approval prompt, so ' + (many ? 'these tools were' : 'this tool was') +
+      ' blocked. Allow ' + (many ? 'them' : 'it') + ' for this session and Claude will retry automatically.'));
+    const allowBtn = el('button', { class: 'perm-allow' }, 'Allow ' + list + ' & retry');
+    allowBtn.addEventListener('click', () => {
+      tools.forEach(t => { if (/^[A-Za-z][A-Za-z0-9_]*$/.test(t) && !agent.allowedTools.includes(t)) agent.allowedTools.push(t); });
+      box.classList.add('answered');
+      box.appendChild(el('div', { class: 'perm-detail' }, '→ allowed: ' + list + '. Retrying…'));
+      // Respawn so --allowedTools takes effect, keeping the session (resume),
+      // then re-send the last request so it just continues.
+      if (agent.ws) { try { agent.ws.close(); } catch {} }
+      agent.ws = null;
+      if (agent.lastUserText) agSendText(agent.lastUserText);
+    });
+    const dismiss = el('button', { class: 'perm-deny' }, 'Not now');
+    dismiss.addEventListener('click', () => box.classList.add('answered'));
+    box.appendChild(el('div', { class: 'perm-actions' }, [allowBtn, dismiss]));
+    agAppend(box);
+  }
+
+  // A visible "Claude is working…" row pinned to the bottom of the log while a
+  // turn runs, so it's obvious the AI is busy (status text alone was too quiet).
+  function agShowWorking() {
+    if (agent.working) return;
+    agent.working = el('div', { class: 'agent-working' }, [
+      el('span', { class: 'aw-dots', html: '<span></span><span></span><span></span>' }),
+      el('span', { class: 'aw-label' }, 'Claude is working…'),
+    ]);
+    agClearEmpty();
+    agLog().appendChild(agent.working);
+    agScroll(true);
+  }
+  function agHideWorking() {
+    if (agent.working) { agent.working.remove(); agent.working = null; }
+  }
+  // Keep the working row last as new messages stream in.
+  function agBumpWorking() {
+    if (agent.working && agent.working.parentNode) agLog().appendChild(agent.working);
+  }
+
+  function agStartTurn() {
+    agent.running = true;
+    agent.stopping = false;
+    const btn = $('#agent-submit');
+    btn.classList.add('is-running');
+    btn.title = 'Stop (interrupt the current turn)';
+    setAgentStatus('working…', 'run');
+    agShowWorking();
+  }
+  function agEndTurn() {
+    agent.running = false;
+    agHideWorking();
+    const btn = $('#agent-submit');
+    btn.classList.remove('is-running');
+    btn.title = 'Send (Enter)';
+    const pm = agent.mode;
+    setAgentStatus('ready · ' + (agent.model || '') + ' · ' + (MODE_LABELS[pm] || pm));
+    if (agent.queued) {
+      const q = agent.queued;
+      agent.queued = '';
+      agSendText(q);
+    }
+  }
+
+  // ---- transport ----
+  function connectAgent() {
+    if (agent.ws && agent.ws.readyState <= 1) return;
+    const proto = location.protocol === 'https:' ? 'wss://' : 'ws://';
+    const params = new URLSearchParams();
+    if (state.currentDoc) params.set('docPath', state.currentDoc.path);
+    else if (state.currentFolder) params.set('folderPath', state.currentFolder);
+    params.set('mode', agent.mode);
+    if (agent.sessionId) params.set('resume', agent.sessionId);
+    if (agent.allowedTools.length) params.set('allow', agent.allowedTools.join(','));
+
+    const sel = state.currentDoc ? state.currentDoc.path
+              : state.currentFolder ? state.currentFolder : '';
+    agent.sessionWorkspace = splitWorkspacePath(sel).workspace
+      || (state.index && state.index.roots && state.index.roots[0] && state.index.roots[0].name) || '';
+    updateAgentContext();
+
+    const ws = new WebSocket(proto + location.host + '/agent?' + params.toString());
+    agent.ws = ws;
+    setAgentStatus('connecting…');
+    ws.onmessage = (e) => {
+      let m; try { m = JSON.parse(e.data); } catch { return; }
+      if (m.t === 'started') { agent.cwd = m.cwd || ''; if (!agent.running) setAgentStatus('connecting…'); }
+      else if (m.t === 'event') agHandleEvent(m.ev);
+      else if (m.t === 'error') { agSystem(m.message, true); agEndTurn(); }
+      else if (m.t === 'exit') {
+        if (agent.stopping) {
+          agent.stopping = false;
+          agSystem('Stopped. Send another message to continue.');
+        } else {
+          agSystem('Session ended (code ' + (m.code == null ? '?' : m.code) + '). Send a message to resume, or click Restart.', m.code !== 0 && m.code != null);
+        }
+        agEndTurn(); setAgentStatus('ready');
+      }
+    };
+    ws.onclose = () => { if (agent.ws === ws) { agent.ws = null; if (agent.running) agEndTurn(); } };
+    ws.onerror = () => setAgentStatus('connection error', 'error');
+  }
+
+  function agSendText(text) {
+    const t = (text || '').trim();
+    if (!t) return;
+    agent.lastUserText = t;
+    if (!agent.ws || agent.ws.readyState !== 1) connectAgent();
+    // If still connecting, wait until open.
+    const fire = () => {
+      agent.ws.send(JSON.stringify({ t: 'input', text: t }));
+      agAppend(el('div', { class: 'msg msg-user' }, el('div', { class: 'msg-body' }, t)));
+      agStartTurn();
+    };
+    if (agent.ws.readyState === 1) fire();
+    else agent.ws.addEventListener('open', fire, { once: true });
+  }
+
+  function agSendFromComposer() {
+    const ta = $('#agent-input');
+    const text = ta.value;
+    if (!text.trim()) return;
+    ta.value = '';
+    autoGrowAgentInput();
+    if (agent.running) {
+      // queue (replace) the next turn until the current one finishes
+      agent.queued = (agent.queued ? agent.queued + '\n' : '') + text.trim();
+      setAgentStatus('queued — will send after this turn', 'run');
+      agAppend(el('div', { class: 'msg msg-user' }, el('div', { class: 'msg-body' }, text.trim())));
+      return;
+    }
+    agSendText(text);
+  }
+
+  function agStop() {
+    agent.stopping = true;   // so the resulting exit reads as a deliberate stop
+    if (agent.ws && agent.ws.readyState === 1) agent.ws.send(JSON.stringify({ t: 'interrupt' }));
+    setAgentStatus('stopping…', 'run');
+  }
+
+  const AGENT_INPUT_MAX = 160;
+  function autoGrowAgentInput() {
+    const ta = $('#agent-input');
+    if (!ta) return;
+    ta.style.height = 'auto';
+    const needed = ta.scrollHeight;
+    ta.style.height = Math.min(AGENT_INPUT_MAX, needed) + 'px';
+    // Only show the scrollbar once the content actually exceeds the max height;
+    // while it's still growing the bar is useless and just clutters the box.
+    ta.style.overflowY = needed > AGENT_INPUT_MAX ? 'auto' : 'hidden';
+  }
+
+  // ---- context / @-insert ----
+  // The session can access every mounted workspace (server adds --add-dir for
+  // all roots), so any selected file is insertable: a path relative to the
+  // session's cwd root when it lives there, an absolute path otherwise.
+  function rootAbsPath(workspaceName) {
+    const roots = (state.index && state.index.roots) || [];
+    const r = roots.find(x => x.name === workspaceName);
+    return r ? r.path : '';
+  }
+  // Returns { insert, display } for the current selection, or null if nothing
+  // is selected / the path can't be resolved.
+  function agentInsertInfo() {
+    const full = state.currentDoc ? state.currentDoc.path
+               : state.currentFolder ? state.currentFolder : '';
+    if (!full) return null;
+    const { workspace, rel } = splitWorkspacePath(full);
+    const isFolder = !state.currentDoc;
+    const slash = isFolder ? '/' : '';
+    if (agent.sessionWorkspace && workspace === agent.sessionWorkspace) {
+      const r = rel || '.';
+      return { insert: r, display: r + slash };
+    }
+    const abs = rootAbsPath(workspace);
+    if (!abs) return null;
+    const p = rel ? abs + '/' + rel : abs;
+    return { insert: p, display: p + slash };
+  }
+  function updateAgentContext() {
+    const ctx = $('#agent-context');
+    const insertBtn = $('#agent-insert');
+    if (!ctx) return;
+    const info = agentInsertInfo();
+    if (!info) {
+      ctx.textContent = '';
+      ctx.removeAttribute('data-insertable');
+      ctx.removeAttribute('title');
+      if (insertBtn) { insertBtn.disabled = true; insertBtn.title = 'Select a file or folder in the tree first'; }
+      return;
+    }
+    ctx.textContent = '@' + info.display;
+    ctx.setAttribute('data-insertable', '1');
+    ctx.title = 'Click to add “@' + info.display + '” to your message';
+    if (insertBtn) { insertBtn.disabled = false; insertBtn.title = 'Add “@' + info.display + '” to your message'; }
+  }
+  function agentInsertPath() {
+    const info = agentInsertInfo();
+    if (!info) return;
+    const ta = $('#agent-input');
+    const ins = '@' + info.insert + ' ';
+    ta.value = ta.value + (ta.value && !ta.value.endsWith(' ') ? ' ' : '') + ins;
+    ta.focus();
+    autoGrowAgentInput();
+  }
+
+  // ---- theme ----
+  function applyAgentTheme(name) {
+    agent.theme = name === 'light' ? 'light' : 'dark';
+    try { localStorage.setItem(AGENT_THEME_KEY, agent.theme); } catch {}
+    const panel = $('#agent-panel');
+    if (panel) panel.setAttribute('data-term-theme', agent.theme);
+  }
+
+  // ---- dual-dock bookkeeping ----
+  function syncBothClaude() {
+    const both = agent.open && chat.open;
+    document.body.classList.toggle('both-claude', both);
+    if (both) {
+      const w = $('#agent-panel').getBoundingClientRect().width;
+      document.body.style.setProperty('--agent-w', w + 'px');
+    }
+  }
+
+  // ---- lifecycle ----
+  function ensureAgent() {
+    if (agent.initialized) return;
+    agent.initialized = true;
+    applyAgentTheme(agent.theme);
+    agClear();
+    // Lazy: don't spawn a claude process just because the panel opened. claude
+    // stays silent (no system/init) until the first user message, so connecting
+    // early would leave the footer stuck on "starting…". We connect on the
+    // first send instead (agSendText -> connectAgent).
+    setAgentStatus('idle');
+  }
+  function openAgent() {
+    agent.open = true;
+    $('#agent-panel').classList.remove('hidden');
+    $('#agent-toggle').classList.add('active');
+    updateAgentContext();
+    ensureAgent();
+    syncBothClaude();
+    setTimeout(() => { $('#agent-input') && $('#agent-input').focus(); }, 0);
+  }
+  function closeAgent() {
+    agent.open = false;
+    $('#agent-panel').classList.add('hidden');
+    $('#agent-toggle').classList.remove('active');
+    syncBothClaude();
+  }
+  function toggleAgent() { agent.open ? closeAgent() : openAgent(); }
+  function restartAgent() {
+    if (agent.ws) { try { agent.ws.close(); } catch {} }
+    agent.ws = null;
+    agent.sessionId = '';   // fresh conversation
+    agent.running = false;
+    agClear();
+    // Stay lazy — a fresh process spawns on the next message, not now.
+    setAgentStatus('idle');
+  }
+  function isAgentFocused() {
+    const p = $('#agent-panel');
+    return p && p.contains(document.activeElement);
+  }
+
+  function initAgentResize() {
+    const handle = $('#agent-resizer');
+    const panel = $('#agent-panel');
+    if (!handle || !panel) return;
+    let startX = 0, startW = 0, dragging = false;
+    handle.addEventListener('mousedown', (e) => {
+      dragging = true; startX = e.clientX;
+      startW = panel.getBoundingClientRect().width;
+      document.body.style.cursor = 'ew-resize';
+      e.preventDefault();
+    });
+    window.addEventListener('mousemove', (e) => {
+      if (!dragging) return;
+      const w = Math.max(380, Math.min(window.innerWidth - 200, startW + (startX - e.clientX)));
+      panel.style.width = w + 'px';
+      syncBothClaude();
+    });
+    window.addEventListener('mouseup', () => {
+      if (!dragging) return;
+      dragging = false; document.body.style.cursor = '';
+      syncBothClaude();
+    });
+  }
+
+  function initAgent() {
+    $('#agent-toggle').addEventListener('click', toggleAgent);
+    $('#agent-close').addEventListener('click', closeAgent);
+    $('#agent-restart').addEventListener('click', restartAgent);
+    $('#agent-theme').addEventListener('click', () => applyAgentTheme(agent.theme === 'dark' ? 'light' : 'dark'));
+    $('#agent-submit').addEventListener('click', () => { agent.running ? agStop() : agSendFromComposer(); });
+    $('#agent-insert').addEventListener('click', agentInsertPath);
+    $('#agent-context').addEventListener('click', () => { if ($('#agent-context').hasAttribute('data-insertable')) agentInsertPath(); });
+    const modeSel = $('#agent-mode');
+    modeSel.value = agent.mode;
+    modeSel.addEventListener('change', () => {
+      agent.mode = modeSel.value;
+      // mode changes apply on the next session; restart to take effect now
+      restartAgent();
+    });
+    const ta = $('#agent-input');
+    ta.addEventListener('input', autoGrowAgentInput);
+    ta.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); agSendFromComposer(); }
+    });
+    initAgentResize();
   }
 
   // ---------- live reload (SSE from /api/events) ----------
@@ -3371,6 +4056,9 @@
     $('#chat-insert').addEventListener('click', insertCurrentPathIntoTerminal);
     applyTermTheme(chat.theme); // set initial data-term-theme on the panel
     initChatResize();
+
+    // rich Claude client (structured, stream-json) — 2nd button
+    initAgent();
     window.addEventListener('beforeunload', () => {
       if (chat.ws) try { chat.ws.close(); } catch {}
     });
