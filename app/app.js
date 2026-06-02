@@ -2558,11 +2558,16 @@
     setAgentStatus('interrupting…', 'run');
   }
 
+  const AGENT_INPUT_MAX = 160;
   function autoGrowAgentInput() {
     const ta = $('#agent-input');
     if (!ta) return;
     ta.style.height = 'auto';
-    ta.style.height = Math.min(160, ta.scrollHeight) + 'px';
+    const needed = ta.scrollHeight;
+    ta.style.height = Math.min(AGENT_INPUT_MAX, needed) + 'px';
+    // Only show the scrollbar once the content actually exceeds the max height;
+    // while it's still growing the bar is useless and just clutters the box.
+    ta.style.overflowY = needed > AGENT_INPUT_MAX ? 'auto' : 'hidden';
   }
 
   // ---- context / @-insert ----
