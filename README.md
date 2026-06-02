@@ -41,7 +41,8 @@ The first time you launch ClawDoc, it shows a folder picker. Choose the folder y
 - **Renders HTML** in a sandboxed iframe; relative `<a>` links to other indexed docs stay inside ClawDoc, relative images resolve against the document's folder.
 - **Renders PDFs** inline via the embedded Chromium PDF viewer (no plugin install).
 - **Search** ranks title/filename matches above body matches and supports multi-word AND queries.
-- **Embedded Claude terminal** — a real PTY (via [xterm.js](https://xtermjs.org/) + [node-pty](https://github.com/microsoft/node-pty)) bound to the `claude` CLI, cwd'd to the doc's workspace.
+- **Embedded Claude terminal** (the **Claude** button) — a real PTY (via [xterm.js](https://xtermjs.org/) + [node-pty](https://github.com/microsoft/node-pty)) bound to the `claude` CLI, cwd'd to the doc's workspace. This is the full interactive TUI: slash commands, permission modes, plan mode — everything your normal `claude` does.
+- **Rich Claude client** (the **Claude ✦** button) — an *experimental* structured front-end over the same `claude` binary running in stream-json mode. Renders the conversation as message bubbles, collapsible tool cards, inline diffs for edits, a permission-mode selector, and clickable `file.md` links that open the doc inside ClawDoc. Runs side-by-side with the PTY terminal so you can compare them. See [docs/roadmap/vscode-style-claude-client.md](docs/roadmap/vscode-style-claude-client.md) for the rationale and known gaps (it does **not** yet match the PTY's full slash-command/REPL surface).
 - **Multiple workspaces** — attach more than one folder; each shows up as its own top-level tree.
 - **Quick open** (`Cmd/Ctrl+P`) and global search (`/`).
 - **Git-aware** — built-in `isomorphic-git` integration commits document edits with `clawdoc: edit <files>` messages, and optionally auto-pushes to GitHub if you've signed in.

@@ -38,6 +38,7 @@
         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="8" height="16" rx="1"/><rect x="13" y="4" width="8" height="16" rx="1"/></svg>
       </button>
       <button id="chat-toggle" title="Open Claude Code terminal for this workspace">Claude</button>
+      <button id="agent-toggle" title="Open the structured Claude client (rich rendering) — compare with the PTY terminal">Claude ✦</button>
       <button id="reindex" title="Regenerate index (rescans the filesystem)">Reindex</button>
       <button id="settings-toggle" class="topbar-icon-btn" title="Settings" aria-label="Settings">
         <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09a1.65 1.65 0 0 0-1-1.51 1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09a1.65 1.65 0 0 0 1.51-1 1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33h0a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51h0a1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82v0a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
@@ -180,6 +181,39 @@
     <div id="terminal" class="terminal-host"></div>
     <div class="chat-foot">
       <span id="chat-status" class="chat-status">starting…</span>
+    </div>
+  </aside>
+  <aside id="agent-panel" class="agent-panel hidden" data-term-theme="dark">
+    <div id="agent-resizer" class="chat-resizer" title="Drag to resize"></div>
+    <div class="chat-head">
+      <div class="chat-title">Claude ✦</div>
+      <div id="agent-context" class="chat-context"></div>
+      <div class="chat-head-actions">
+        <select id="agent-mode" class="agent-mode" title="Permission mode for this session">
+          <option value="default">default</option>
+          <option value="plan">plan</option>
+          <option value="acceptEdits">acceptEdits</option>
+          <option value="bypassPermissions">bypass</option>
+        </select>
+        <button id="agent-theme" title="Toggle theme (dark/light)" aria-label="Toggle theme">
+          <svg class="theme-icon theme-icon-dark" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>
+          <svg class="theme-icon theme-icon-light" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M4.93 19.07l1.41-1.41M17.66 6.34l1.41-1.41"/></svg>
+        </button>
+        <button id="agent-restart" title="Restart session (clears the conversation)">Restart</button>
+        <button id="agent-close" title="Close (Esc when composer not focused)">✕</button>
+      </div>
+    </div>
+    <div id="agent-log" class="agent-log" role="log" aria-live="polite" aria-label="Claude conversation"></div>
+    <div class="agent-composer">
+      <button id="agent-insert" class="agent-insert" title="Insert the selected file/folder path" disabled aria-label="Insert selected path">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 3h7v7"/><path d="M10 14 21 3"/><path d="M21 14v7H3V3h7"/></svg>
+      </button>
+      <textarea id="agent-input" class="agent-input" rows="1" placeholder="Message Claude…  (Enter to send, Shift+Enter for newline)" spellcheck="false"></textarea>
+      <button id="agent-send" class="agent-send" title="Send (Enter)">Send</button>
+      <button id="agent-stop" class="agent-stop hidden" title="Interrupt the current turn">Stop</button>
+    </div>
+    <div class="chat-foot">
+      <span id="agent-status" class="chat-status">idle</span>
     </div>
   </aside>
 </div>

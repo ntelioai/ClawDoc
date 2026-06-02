@@ -1070,7 +1070,7 @@ server.on('upgrade', (req, socket, head) => {
     socket.destroy();
     return;
   }
-  if (pathname !== '/terminal') {
+  if (pathname !== '/terminal' && pathname !== '/agent') {
     socket.destroy();
     return;
   }
@@ -1081,7 +1081,8 @@ server.on('upgrade', (req, socket, head) => {
     return;
   }
   wss.handleUpgrade(req, socket, head, (ws) => {
-    attachTerminal(ws, query);
+    if (pathname === '/agent') attachAgent(ws, query);
+    else attachTerminal(ws, query);
   });
 });
 
@@ -1192,6 +1193,115 @@ async function attachTerminal(ws, query) {
   ws.on('error', () => {
     try { term.kill(); } catch {}
   });
+}
+
+// ---------- Claude Code structured ("rich") client ----------
+// A WebSocket on /agent runs `claude` in stream-json mode and relays the typed
+// event stream to a structured renderer, instead of piping a PTY of the TUI.
+// Same binary / auth / cwd as /terminal — the only thing that differs is the
+// front-end, so the two can be compared head-to-head. The exact event shapes
+// this codes to are captured in docs/roadmap/stream-json-notes.md.
+//
+// Wire protocol (text frames, JSON):
+//   client → server: {t:'input', text:string}            one user turn
+//                    {t:'interrupt'}                      SIGINT the current turn
+//                    {t:'permission', requestId, decision:'allow'|'deny', updatedInput?, message?}
+//   server → client: {t:'started', bin, cwd}
+//                    {t:'event', ev:<stream-json object>} one CLI event, verbatim
+//                    {t:'exit', code, signal}
+//                    {t:'error', message}
+const VALID_PERMISSION_MODES = new Set(['default', 'plan', 'acceptEdits', 'bypassPermissions']);
+
+function attachAgent(ws, query) {
+  const cwd = pickTerminalCwd(query);
+  const send = (obj) => { if (ws.readyState === 1) ws.send(JSON.stringify(obj)); };
+
+  const mode = VALID_PERMISSION_MODES.has((query && query.mode) || '') ? query.mode : 'default';
+  // stream-json input keeps the process alive across turns (see notes); the
+  // `result` event ends a turn, not the session.
+  const args = ['--input-format', 'stream-json', '--output-format', 'stream-json',
+    '--verbose', '-p', '--permission-mode', mode];
+  const resume = ((query && query.resume) || '').trim();
+  if (/^[A-Za-z0-9-]{8,}$/.test(resume)) args.push('--resume', resume);
+
+  // Same candidate list as the PTY path, but a plain pipe spawn — no PTY needed
+  // since we consume JSON, not a TUI.
+  let child = null, chosenBin, lastErr;
+  for (const bin of findClaudeBinary()) {
+    try {
+      child = spawn(bin, args, { cwd, env: { ...process.env }, stdio: ['pipe', 'pipe', 'pipe'] });
+      chosenBin = bin;
+      break;
+    } catch (err) { lastErr = err; child = null; }
+  }
+  if (!child) {
+    send({ t: 'error', message:
+      'Could not start Claude Code. Tried: ' + findClaudeBinary().join(', ') +
+      '. Install with `npm i -g @anthropic-ai/claude-code` or from claude.ai/download. ' +
+      'Underlying error: ' + (lastErr && lastErr.message || 'unknown') });
+    try { ws.close(); } catch {}
+    return;
+  }
+  console.log(`[agent] spawn bin=${chosenBin} cwd=${cwd} mode=${mode}${resume ? ' resume=' + resume : ''}`);
+  send({ t: 'started', bin: chosenBin, cwd });
+
+  // stdout is newline-delimited JSON; buffer partial lines across chunks.
+  let buf = '';
+  child.stdout.on('data', (chunk) => {
+    buf += chunk.toString();
+    let nl;
+    while ((nl = buf.indexOf('\n')) >= 0) {
+      const line = buf.slice(0, nl).trim();
+      buf = buf.slice(nl + 1);
+      if (!line) continue;
+      let ev;
+      try { ev = JSON.parse(line); } catch { continue; }
+      send({ t: 'event', ev });
+    }
+  });
+  let stderrBuf = '';
+  child.stderr.on('data', (d) => {
+    stderrBuf += d.toString();
+    if (stderrBuf.length > 8192) stderrBuf = stderrBuf.slice(-8192);
+  });
+
+  child.on('exit', (code, signal) => {
+    if (stderrBuf.trim()) send({ t: 'error', message: stderrBuf.trim().slice(0, 2000) });
+    send({ t: 'exit', code, signal: signal || null });
+    try { ws.close(); } catch {}
+  });
+  child.on('error', (err) => send({ t: 'error', message: err.message }));
+
+  const writeStdin = (obj) => {
+    try { child.stdin.write(JSON.stringify(obj) + '\n'); } catch {}
+  };
+
+  ws.on('message', (raw) => {
+    let msg;
+    try { msg = JSON.parse(raw.toString()); } catch { return; }
+    if (msg.t === 'input' && typeof msg.text === 'string') {
+      writeStdin({ type: 'user', message: { role: 'user', content: msg.text } });
+    } else if (msg.t === 'interrupt') {
+      try { child.kill('SIGINT'); } catch {}
+    } else if (msg.t === 'permission' && msg.requestId) {
+      // Defensive: only meaningful if the CLI emitted a can_use_tool
+      // control_request. No-op otherwise (see notes — permission protocol).
+      const allow = msg.decision === 'allow';
+      writeStdin({
+        type: 'control_response',
+        response: {
+          subtype: 'success',
+          request_id: msg.requestId,
+          response: allow
+            ? { behavior: 'allow', updatedInput: msg.updatedInput || undefined }
+            : { behavior: 'deny', message: msg.message || 'Denied by user' },
+        },
+      });
+    }
+  });
+
+  ws.on('close', () => { try { child.kill('SIGKILL'); } catch {} });
+  ws.on('error', () => { try { child.kill('SIGKILL'); } catch {} });
 }
 
 // ---------- git / github handlers ----------
