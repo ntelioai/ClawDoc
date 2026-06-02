@@ -2169,9 +2169,14 @@ body.mc-on .tabbar { display: none !important; }
 .history-commit .hc-meta { color: var(--text-dim); margin-top: 2px; font-size: 11px; }
 .history-commit .hc-meta code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
 /* min-width:0 lets this grid track shrink below the diff table's intrinsic
-   width so the side-by-side diff scrolls inside the pane instead of
-   overflowing the dialog. */
-.history-diff { overflow: auto; min-width: 0; background: var(--bg); padding: 8px 12px; }
+   width so the diff scrolls inside the pane instead of overflowing the dialog.
+   position:relative makes this scroll container the containing block for
+   diff2html's position:absolute line-number gutters (.d2h-code-linenumber).
+   Without it they resolve against the position:fixed .history-modal, so they
+   spill past the modal's bottom edge and don't scroll with the diff body
+   (issue #23). Anchored here, they ride along with the content and are clipped
+   by overflow:auto. */
+.history-diff { overflow: auto; min-width: 0; position: relative; background: var(--bg); padding: 8px 12px; }
 .history-diff .empty {
   color: var(--text-dim); text-align: center; padding: 40px 20px;
   font-size: 13px;
