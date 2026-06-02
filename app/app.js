@@ -2111,6 +2111,8 @@
     toolCards: {},         // tool_use id -> { card, result }
     queued: '',            // message typed while a turn was running
     working: null,         // the "Claude is working…" indicator element
+    allowedTools: [],      // tools the user approved after a block (--allowedTools)
+    lastUserText: '',      // last message sent, for one-click retry after approval
     theme: (() => {
       try { return localStorage.getItem(AGENT_THEME_KEY) === 'dark' ? 'dark' : 'light'; }
       catch { return 'light'; }
@@ -2418,7 +2420,10 @@
   }
 
   function agAssistantText(text) {
-    if (text == null) return;
+    // Skip empty / whitespace-only text blocks. Claude often emits these between
+    // tool calls; rendered, they became tiny empty bubbles — the stack of faint
+    // "horizontal lines" in the conversation.
+    if (text == null || !String(text).trim()) return;
     // Each assistant text block is a complete chunk; append as its own bubble.
     agent.activeText = text;
     const body = agMarkdownBody(text);
@@ -2432,27 +2437,35 @@
       el('div', { class: 'msg-body' }, text)));
   }
 
-  // One clear, actionable card when Claude was blocked from acting — instead of
-  // raw "Permission denied" notices. Offers a one-click switch to auto-edit.
+  // One clear, actionable card when Claude was blocked from using a tool — this
+  // headless panel can't show a live approval prompt, so the tool was denied
+  // regardless of mode (acceptEdits only auto-allows edits; things like WebFetch
+  // still need approval). The fix is to pre-allow the *specific* tool for this
+  // session (--allowedTools) and retry — not to change the edit mode.
   function agDenialNotice(denials) {
-    const tools = [...new Set(denials.map(d => d.tool_name || 'a tool'))].join(', ');
+    const tools = [...new Set(denials.map(d => d.tool_name).filter(Boolean))];
+    if (!tools.length) tools.push('a tool');
+    const list = tools.join(', ');
+    const many = tools.length > 1;
     const box = el('div', { class: 'perm-prompt' });
-    box.appendChild(el('div', { class: 'perm-title' }, '✋ Claude needs permission to use ' + tools));
+    box.appendChild(el('div', { class: 'perm-title' }, '✋ Claude needs permission to use ' + list));
     box.appendChild(el('div', { class: 'perm-detail' },
-      'The current mode is “Ask before edits”, which can’t show an approval prompt in this panel, so the action was blocked. Switch to “Edit automatically” to let Claude proceed.'));
-    const actions = el('div', { class: 'perm-actions' }, [
-      el('button', {
-        class: 'perm-allow',
-        onclick: () => {
-          agent.mode = 'acceptEdits';
-          const sel = $('#agent-mode'); if (sel) sel.value = 'acceptEdits';
-          box.classList.add('answered');
-          restartAgent();
-          agSystem('Switched to “Edit automatically”. Re-send your request.');
-        },
-      }, 'Switch to Edit automatically'),
-    ]);
-    box.appendChild(actions);
+      'This panel can’t show a live approval prompt, so ' + (many ? 'these tools were' : 'this tool was') +
+      ' blocked. Allow ' + (many ? 'them' : 'it') + ' for this session and Claude will retry automatically.'));
+    const allowBtn = el('button', { class: 'perm-allow' }, 'Allow ' + list + ' & retry');
+    allowBtn.addEventListener('click', () => {
+      tools.forEach(t => { if (/^[A-Za-z][A-Za-z0-9_]*$/.test(t) && !agent.allowedTools.includes(t)) agent.allowedTools.push(t); });
+      box.classList.add('answered');
+      box.appendChild(el('div', { class: 'perm-detail' }, '→ allowed: ' + list + '. Retrying…'));
+      // Respawn so --allowedTools takes effect, keeping the session (resume),
+      // then re-send the last request so it just continues.
+      if (agent.ws) { try { agent.ws.close(); } catch {} }
+      agent.ws = null;
+      if (agent.lastUserText) agSendText(agent.lastUserText);
+    });
+    const dismiss = el('button', { class: 'perm-deny' }, 'Not now');
+    dismiss.addEventListener('click', () => box.classList.add('answered'));
+    box.appendChild(el('div', { class: 'perm-actions' }, [allowBtn, dismiss]));
     agAppend(box);
   }
 
@@ -2509,6 +2522,7 @@
     else if (state.currentFolder) params.set('folderPath', state.currentFolder);
     params.set('mode', agent.mode);
     if (agent.sessionId) params.set('resume', agent.sessionId);
+    if (agent.allowedTools.length) params.set('allow', agent.allowedTools.join(','));
 
     const sel = state.currentDoc ? state.currentDoc.path
               : state.currentFolder ? state.currentFolder : '';
@@ -2541,6 +2555,7 @@
   function agSendText(text) {
     const t = (text || '').trim();
     if (!t) return;
+    agent.lastUserText = t;
     if (!agent.ws || agent.ws.readyState !== 1) connectAgent();
     // If still connecting, wait until open.
     const fire = () => {

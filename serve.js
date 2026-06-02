@@ -1226,6 +1226,12 @@ function attachAgent(ws, query) {
   // panel inserts an absolute path for files outside the cwd root).
   const extraDirs = ROOTS.map(r => r.path).filter(p => p && p !== cwd);
   if (extraDirs.length) args.push('--add-dir', ...extraDirs);
+  // Per-session pre-approved tools (e.g. WebFetch) — the rich panel adds the
+  // exact tool the user approved after it was blocked, so it runs next turn
+  // without needing an interactive prompt this headless mode can't show.
+  const allow = ((query && query.allow) || '').split(',')
+    .map(s => s.trim()).filter(s => /^[A-Za-z][A-Za-z0-9_]*$/.test(s));
+  if (allow.length) args.push('--allowedTools', ...allow);
   const resume = ((query && query.resume) || '').trim();
   if (/^[A-Za-z0-9-]{8,}$/.test(resume)) args.push('--resume', resume);
 
