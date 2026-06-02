@@ -351,6 +351,7 @@ body.embed .main { display: block; height: 100vh; }
 body.embed .content { height: 100vh; }
 body.embed .html-frame,
 body.embed .pdf-frame-wrap { height: 100vh !important; }
+body.embed .sheet-frame-wrap { height: 100vh !important; }
 body.embed .doc-view { max-width: 860px; }
 
 /* ---------- main ---------- */
@@ -595,6 +596,7 @@ body.fullscreen .content { height: 100vh; }
 body.fullscreen .viewer { height: 100vh; }
 body.fullscreen .html-frame,
 body.fullscreen .pdf-frame-wrap { height: 100vh !important; }
+body.fullscreen .sheet-frame-wrap { height: 100vh !important; }
 body.fullscreen .breadcrumb {
   position: fixed;
   top: 0;
@@ -889,6 +891,24 @@ code {
   height: 100%;
   border: none;
 }
+/* Spreadsheet (Univer) viewer: fixed-height column so Univer's canvas grid
+   gets definite dimensions to measure against, like the PDF frame. */
+.sheet-frame-wrap {
+  padding: 0;
+  height: calc(100vh - 52px - 40px - 4px);
+  display: flex;
+  flex-direction: column;
+  background: var(--bg);
+}
+.sheet-note {
+  flex: 0 0 auto;
+  padding: 6px 12px;
+  font-size: 12px;
+  color: var(--text-muted);
+  background: var(--bg-elev);
+  border-bottom: 1px solid var(--border);
+}
+.sheet-host { flex: 1 1 auto; min-height: 0; position: relative; }
 .pdf-fallback {
   position: absolute;
   bottom: 12px;
