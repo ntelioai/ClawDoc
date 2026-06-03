@@ -4483,7 +4483,8 @@
     historyCommits: [],
     historyDoc: null,
     historyActiveOid: null,
-    historyMaximized: false, // remembered across opens within the session
+    // Remembered across app restarts so power users stay maximized (issue #25).
+    historyMaximized: localStorage.getItem('clawdoc.historyMaximized') === '1',
   };
 
   gh.init = function init() {
@@ -5026,6 +5027,7 @@
 
   function toggleHistoryMaximize() {
     gh.historyMaximized = !gh.historyMaximized;
+    try { localStorage.setItem('clawdoc.historyMaximized', gh.historyMaximized ? '1' : '0'); } catch {}
     applyHistoryMaximized();
   }
 
