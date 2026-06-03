@@ -52,6 +52,11 @@
   state.tabs = [];
   state.activeTabId = null;
   state.isEmbed = false;
+  // #26 — secondary windows (opened via "Open/Move to new window", marked with
+  // ?w=1) persist their tab/UI state to per-window sessionStorage instead of the
+  // shared localStorage, so multiple windows don't clobber each other's tab list
+  // (and the primary window keeps restore-on-launch via localStorage).
+  state.isSecondary = false;
   state.suppressPersist = false;
 
   function newTabId() { return 't' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6); }
@@ -86,11 +91,15 @@
     }
   }
 
+  // Primary window → localStorage (durable, restored on relaunch).
+  // Secondary window → sessionStorage (per-window, dies on close).
+  function tabStore() { return state.isSecondary ? sessionStorage : localStorage; }
+
   function persistTabs() {
     if (state.isEmbed || state.suppressPersist) return;
     syncStateToActiveTab();
     try {
-      localStorage.setItem('clawdoc.tabs', JSON.stringify({
+      tabStore().setItem('clawdoc.tabs', JSON.stringify({
         tabs: state.tabs.map(t => ({
           id: t.id, docPath: t.docPath, folder: t.folder, expanded: t.expanded,
         })),
@@ -102,7 +111,7 @@
   function loadPersistedTabs() {
     // New format
     try {
-      const raw = localStorage.getItem('clawdoc.tabs');
+      const raw = tabStore().getItem('clawdoc.tabs');
       if (raw) {
         const obj = JSON.parse(raw);
         if (obj && Array.isArray(obj.tabs) && obj.tabs.length) {
@@ -1884,6 +1893,12 @@
     if (meta && ev.key === 't') {
       ev.preventDefault();
       newTab();
+      return;
+    }
+    // #26 — Cmd/Ctrl+Shift+N opens the current doc in a new window.
+    if (meta && ev.shiftKey && (ev.key === 'n' || ev.key === 'N')) {
+      ev.preventDefault();
+      openInNewWindow(state.currentDoc ? state.currentDoc.path : null);
       return;
     }
     if (meta && ev.key === 'w') {
@@ -4282,6 +4297,10 @@
         // Middle-click closes the tab (browser convention).
         if (ev.button === 1) { ev.preventDefault(); closeTab(t.id); }
       });
+      tab.addEventListener('contextmenu', (ev) => {
+        ev.preventDefault();
+        showTabContextMenu(t, ev.clientX, ev.clientY);
+      });
       bar.appendChild(tab);
     }
   }
@@ -4354,6 +4373,32 @@
     persistTabs();
   }
 
+  function closeOtherTabs(keepId) {
+    // Close every tab except keepId. Switch to it first so the discard guard
+    // (if the active tab is dirty) is resolved against the tab we're keeping.
+    if (!state.tabs.some(t => t.id === keepId)) return;
+    if (state.activeTabId !== keepId) switchTab(keepId);
+    if (state.activeTabId !== keepId) return; // switch was cancelled (unsaved edits)
+    state.tabs = state.tabs.filter(t => t.id === keepId);
+    renderTabs();
+    persistTabs();
+  }
+
+  // #26 — right-click a tab.
+  function showTabContextMenu(t, x, y) {
+    const hasDoc = !!t.docPath;
+    const items = [
+      { label: 'Open in new window', onClick: () => openInNewWindow(t.docPath) },
+      { label: 'Move to new window', onClick: () => { openInNewWindow(t.docPath); closeTab(t.id); } },
+      '-',
+      { label: 'Close', onClick: () => closeTab(t.id) },
+    ];
+    if (state.tabs.length > 1) {
+      items.push({ label: 'Close others', onClick: () => closeOtherTabs(t.id) });
+    }
+    showCtxMenu(x, y, items, hasDoc ? basename(t.docPath) : 'Tab');
+  }
+
   // ---------- context menu ----------
   function buildEmbedUrl(docPath, anchor) {
     return location.origin + location.pathname + '?embed=1#doc=' + encodeURIComponent(docPath) + (anchor ? '&a=' + encodeURIComponent(anchor) : '');
@@ -4365,6 +4410,20 @@
     const w = Math.min(1100, screen.availWidth - 100);
     const h = Math.min(820, screen.availHeight - 100);
     window.open(buildEmbedUrl(docPath), '_blank', `noopener,width=${w},height=${h}`);
+  }
+
+  // #26 — open a full, independent ClawDoc window (not the stripped embed view).
+  // Marked ?w=1 so it persists tab/UI state to its own sessionStorage; the
+  // optional doc is deep-linked via the #doc= hash. Electron turns this
+  // window.open into a real BrowserWindow via setWindowOpenHandler; in a plain
+  // browser it's a normal popup window. (No `noopener`: per spec the new window
+  // inherits a copy of the opener's sessionStorage, a useful seed.)
+  function openInNewWindow(docPath) {
+    const w = Math.min(1400, screen.availWidth - 80);
+    const h = Math.min(900, screen.availHeight - 80);
+    const url = location.origin + location.pathname + '?w=1'
+      + (docPath ? '#doc=' + encodeURIComponent(docPath) : '');
+    window.open(url, '_blank', `width=${w},height=${h}`);
   }
 
   function hideCtxMenu() { $('#ctx-menu').classList.add('hidden'); }
@@ -4771,6 +4830,9 @@
   function init() {
     // Embed mode — strip chrome and bypass tabs/chat/resize.
     const urlParams = new URLSearchParams(location.search);
+    // Secondary window (#26): full app, but tab state is per-window. Set before
+    // any persistence/restore runs so loadPersistedTabs reads the right store.
+    state.isSecondary = urlParams.has('w');
     if (urlParams.has('embed')) {
       state.isEmbed = true;
       document.body.classList.add('embed');

@@ -102,20 +102,52 @@ async function start() {
     return;
   }
 
+  openMainWindow();
+}
+
+// Shared across the primary window and any window spawned via window.open
+// (#26 multi-window). Kept in one place so secondary windows get the same
+// capabilities (notably the inline-PDF plugin).
+const WEB_PREFERENCES = {
+  contextIsolation: true,
+  nodeIntegration: false,
+  // Enables the Chromium PDF viewer extension so <embed type="application/pdf">
+  // renders inline (off by default in Electron BrowserWindows).
+  plugins: true,
+};
+
+function openMainWindow() {
   const win = new BrowserWindow({
     width: 1400,
     height: 900,
     title: 'ClawDoc',
-    webPreferences: {
-      contextIsolation: true,
-      nodeIntegration: false,
-      // Enables the Chromium PDF viewer extension so <embed type="application/pdf">
-      // renders inline (off by default in Electron BrowserWindows).
-      plugins: true,
-    },
+    webPreferences: WEB_PREFERENCES,
   });
   win.loadURL(`http://127.0.0.1:${PORT}/`);
+  return win;
 }
+
+// #26 — the renderer opens additional windows with window.open('/?w=1#doc=…').
+// Turn every such request into a real, properly-configured BrowserWindow
+// instead of Electron's bare default. Applied to every webContents (primary
+// and spawned) so windows opened from a secondary window work too. Only
+// same-origin local URLs are allowed; anything else is denied.
+app.on('web-contents-created', (_e, contents) => {
+  contents.setWindowOpenHandler(({ url }) => {
+    let sameOrigin = false;
+    try { sameOrigin = new URL(url).origin === `http://127.0.0.1:${PORT}`; } catch {}
+    if (!sameOrigin) return { action: 'deny' };
+    return {
+      action: 'allow',
+      overrideBrowserWindowOptions: {
+        width: 1400,
+        height: 900,
+        title: 'ClawDoc',
+        webPreferences: WEB_PREFERENCES,
+      },
+    };
+  });
+});
 
 app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') app.quit();
@@ -124,19 +156,7 @@ app.on('window-all-closed', () => {
 app.on('activate', () => {
   if (BrowserWindow.getAllWindows().length === 0) {
     // Reopen window on macOS dock click after all windows closed.
-    const win = new BrowserWindow({
-      width: 1400,
-      height: 900,
-      title: 'ClawDoc',
-      webPreferences: {
-      contextIsolation: true,
-      nodeIntegration: false,
-      // Enables the Chromium PDF viewer extension so <embed type="application/pdf">
-      // renders inline (off by default in Electron BrowserWindows).
-      plugins: true,
-    },
-    });
-    win.loadURL(`http://127.0.0.1:${PORT}/`);
+    openMainWindow();
   }
 });
 
