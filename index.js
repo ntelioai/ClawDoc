@@ -67,8 +67,8 @@ const DEFAULT_IGNORES = [
   'Downloads',
 ];
 
-const TEXT_EXTS = new Set(['.md', '.markdown', '.html', '.htm']);
-const BINARY_EXTS = new Set(['.pdf']);
+const TEXT_EXTS = new Set(['.md', '.markdown', '.html', '.htm', '.csv']);
+const BINARY_EXTS = new Set(['.pdf', '.xlsx']);
 const EXTS = new Set([...TEXT_EXTS, ...BINARY_EXTS]);
 const MAX_FILE_BYTES = 2 * 1024 * 1024; // skip text files > 2 MB
 const MAX_BINARY_BYTES = 100 * 1024 * 1024; // allow PDFs up to 100 MB
@@ -211,10 +211,17 @@ function walk(dir, ignores, docs, folders, root) {
         let content = '';
         try { content = fs.readFileSync(full, 'utf8'); } catch { continue; }
         const isMd = ext === '.md' || ext === '.markdown';
-        title = isMd ? extractTitleMd(content) : extractTitleHtml(content);
-        body = isMd ? plainTextFromMd(content) : plainTextFromHtml(content);
-        links = (isMd ? extractLinksMd(content) : extractLinksHtml(content))
-          .filter(l => !isExternalOrAnchor(l));
+        const isHtmlDoc = ext === '.html' || ext === '.htm';
+        if (isMd || isHtmlDoc) {
+          title = isMd ? extractTitleMd(content) : extractTitleHtml(content);
+          body = isMd ? plainTextFromMd(content) : plainTextFromHtml(content);
+          links = (isMd ? extractLinksMd(content) : extractLinksHtml(content))
+            .filter(l => !isExternalOrAnchor(l));
+        } else {
+          // Other plain-text kinds (e.g. .csv): index the raw text so cell
+          // contents are searchable, but there's no title/links to extract.
+          body = content;
+        }
       }
       const parsed = parseFilename(e.name);
       docs.push({
@@ -285,12 +292,13 @@ function main() {
       md: docs.filter(d => d.ext === 'md' || d.ext === 'markdown').length,
       html: docs.filter(d => d.ext === 'html' || d.ext === 'htm').length,
       pdf: docs.filter(d => d.ext === 'pdf').length,
+      xls: docs.filter(d => d.ext === 'csv' || d.ext === 'xlsx').length,
       durationMs: Date.now() - t0,
     },
   };
   fs.writeFileSync(INDEX_PATH, JSON.stringify(index));
   const rootSummary = ROOTS.map(r => r.name + ' → ' + r.path).join(', ');
-  console.log(`clawdoc: indexed ${docs.length} docs (${index.stats.md} md, ${index.stats.html} html, ${index.stats.pdf} pdf) across ${folders.size} folders in ${index.stats.durationMs}ms`);
+  console.log(`clawdoc: indexed ${docs.length} docs (${index.stats.md} md, ${index.stats.html} html, ${index.stats.pdf} pdf, ${index.stats.xls} sheets) across ${folders.size} folders in ${index.stats.durationMs}ms`);
   console.log(`        roots: ${rootSummary}`);
   console.log(`        -> ${INDEX_PATH}`);
 }

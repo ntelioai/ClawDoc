@@ -161,6 +161,8 @@ const MIME = {
   '.md': 'text/plain; charset=utf-8',
   '.markdown': 'text/plain; charset=utf-8',
   '.txt': 'text/plain; charset=utf-8',
+  '.csv': 'text/csv; charset=utf-8',
+  '.xlsx': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
   '.png': 'image/png',
   '.jpg': 'image/jpeg',
   '.jpeg': 'image/jpeg',
