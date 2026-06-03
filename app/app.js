@@ -309,6 +309,7 @@
   const ICON_IMAGE = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></svg>';
   const ICON_TEXT = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/><line x1="10" y1="9" x2="8" y2="9"/></svg>';
   const ICON_FILE = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M13 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9z"/><polyline points="13 2 13 9 20 9"/></svg>';
+  const ICON_DOCX = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="8" y1="13" x2="16" y2="13"/><line x1="8" y1="17" x2="16" y2="17"/><line x1="8" y1="9" x2="11" y2="9"/></svg>';
   const ICON_CHEVRON = '<svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><polyline points="6 9 12 15 18 9"/></svg>';
   const ICON_REFRESH = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></svg>';
   const ICON_CHECK = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>';
@@ -379,7 +380,7 @@
       renderTree();
       renderTabs();
       if (state.mcMode) renderMcMode();
-      $('#doc-count').textContent = `${data.stats.docCount} docs · ${data.stats.md} md · ${data.stats.html} html · ${data.stats.pdf || 0} pdf · ${data.stats.xls || 0} sheets · ${data.stats.folderCount} folders`;
+      $('#doc-count').textContent = `${data.stats.docCount} docs · ${data.stats.md} md · ${data.stats.html} html · ${data.stats.pdf || 0} pdf · ${data.stats.xls || 0} sheets · ${data.stats.docx || 0} docx · ${data.stats.folderCount} folders`;
       const gen = new Date(data.generatedAt);
       if (!silent) setStatus('indexed ' + gen.toLocaleTimeString(), 'ok');
       if (!silent) restoreFromHash();
@@ -485,6 +486,7 @@
   }
 
   function isSheetExt(ext) { return ext === 'csv' || ext === 'xlsx'; }
+  function isDocxExt(ext) { return ext === 'docx'; }
   const IMAGE_EXTS = ['png','jpg','jpeg','gif','svg','webp','bmp','ico','avif'];
   const TEXT_EXTS = ['txt','text','tsv','json','jsonc','yaml','yml','xml',
     'toml','ini','cfg','conf','log','js','mjs','cjs','ts','tsx','jsx','css',
@@ -496,6 +498,7 @@
   // prefer the indexer's `kind`, falling back to ext for pre-reindex files.
   function docKind(doc) {
     if (isSheetExt(doc.ext)) return 'sheet';
+    if (isDocxExt(doc.ext)) return 'docx';
     if (doc.kind) return doc.kind;
     const e = doc.ext;
     if (e === 'md' || e === 'markdown') return 'markdown';
@@ -510,6 +513,7 @@
     if (k === 'pdf') return 'doc-pdf';
     if (k === 'html') return 'doc-html';
     if (k === 'sheet') return 'doc-sheet';
+    if (k === 'docx') return 'doc-docx';
     if (k === 'image') return 'doc-image';
     if (k === 'text') return 'doc-text';
     if (k === 'binary') return 'doc-binary';
@@ -520,6 +524,7 @@
     if (k === 'pdf') return ICON_PDF;
     if (k === 'html') return ICON_HTML;
     if (k === 'sheet') return ICON_SHEET;
+    if (k === 'docx') return ICON_DOCX;
     if (k === 'image') return ICON_IMAGE;
     if (k === 'text') return ICON_TEXT;
     if (k === 'binary') return ICON_FILE;
@@ -1284,6 +1289,135 @@
     }
   }
 
+  // ---------- docx view (SuperDoc, editable) ----------
+  // SuperDoc's bundle is ~5.5 MB, so it loads lazily the first time a .docx is
+  // opened. It's a self-contained IIFE exposing window.SuperDoc.{SuperDoc,...};
+  // it imports AND exports .docx fully client-side (ProseMirror + JSZip, no
+  // server). We mount it in 'editing' mode with its toolbar, fetch the file as
+  // a File object for import, and on save call sd.export({exportType:['docx']})
+  // to get a docx Blob that we POST through the same binary save path as #24.
+  // Round-trip scope (#27): SuperDoc is OOXML-native, so paragraphs, runs,
+  // styles, tables, images, headers/footers, lists, tracked changes and
+  // comments survive the round-trip far better than an html bridge would;
+  // truly exotic constructs may still normalize. docx diffs as a binary blob.
+  let _superdocLoad = null;   // promise: superdoc.min.js + css
+  let _activeSuperdoc = null; // SuperDoc instance
+  let _docxDoc = null;        // doc currently mounted
+  let _docxDirty = false;     // edited since load/save?
+  let _docxReady = false;     // editor finished loading (ignore load-time updates)
+  let _docxSaveFn = null;     // bound save handler for ⌘S
+
+  function loadSuperdocAssets() {
+    if (_superdocLoad) return _superdocLoad;
+    const base = '/app/vendor/superdoc/';
+    const link = document.createElement('link');
+    link.rel = 'stylesheet';
+    link.href = base + 'superdoc-style.css';
+    document.head.appendChild(link);
+    _superdocLoad = loadScriptOnce(base + 'superdoc.min.js');
+    return _superdocLoad;
+  }
+
+  function disposeSuperdoc() {
+    _docxDoc = null;
+    _docxDirty = false;
+    _docxReady = false;
+    _docxSaveFn = null;
+    if (!_activeSuperdoc) return;
+    try { _activeSuperdoc.destroy(); } catch {}
+    _activeSuperdoc = null;
+  }
+
+  function isDocxDirty() { return !!(_activeSuperdoc && _docxDirty); }
+
+  async function renderDocx(doc, viewer, bust) {
+    const wrap = el('div', { class: 'docx-frame-wrap' });
+    const bar = el('div', { class: 'docx-bar' });
+    bar.appendChild(el('span', { class: 'docx-note' },
+      'Editable Word document — saves back as DOCX. Text, styles, tables, images and headers/footers are preserved; exotic constructs may normalize.'));
+    const status = el('span', { class: 'docx-status' });
+    const saveBtn = el('button', { class: 'docx-save', disabled: 'true' }, 'Save  ⌘S');
+    bar.appendChild(status);
+    bar.appendChild(saveBtn);
+    const toolbar = el('div', { class: 'docx-toolbar', id: 'docx-toolbar' });
+    const host = el('div', { class: 'docx-host', id: 'docx-host' });
+    wrap.appendChild(bar);
+    wrap.appendChild(toolbar);
+    wrap.appendChild(host);
+    viewer.appendChild(wrap);
+
+    const markDirty = () => {
+      if (!_docxReady || _docxDirty) return;
+      _docxDirty = true;
+      saveBtn.disabled = false;
+      status.textContent = '● Unsaved changes';
+      status.className = 'docx-status dirty';
+    };
+
+    const doSave = async () => {
+      if (!_activeSuperdoc || !_docxDirty) return;
+      status.textContent = 'Saving…';
+      status.className = 'docx-status';
+      saveBtn.disabled = true;
+      try {
+        // Native client-side docx export → a single Blob (triggerDownload off
+        // so we get the bytes rather than a browser download).
+        const blob = await _activeSuperdoc.export({ exportType: ['docx'], triggerDownload: false });
+        const resp = await fetch('/api/save?path=' + encodeURIComponent(doc.path), {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/octet-stream' },
+          body: blob,
+        });
+        const data = await resp.json().catch(() => ({}));
+        if (!resp.ok || !data.ok) throw new Error(data.error || ('HTTP ' + resp.status));
+        _docxDirty = false;
+        status.textContent = 'Saved ✓';
+        status.className = 'docx-status ok';
+        const idx = state.docs.find(d => d.path === doc.path);
+        if (idx) { idx.size = data.size; idx.mtime = data.mtime; }
+        setTimeout(() => { if (status.textContent === 'Saved ✓') status.textContent = ''; }, 1500);
+      } catch (err) {
+        status.textContent = 'Error: ' + err.message;
+        status.className = 'docx-status error';
+        saveBtn.disabled = false;
+      }
+    };
+    saveBtn.addEventListener('click', doSave);
+
+    try {
+      await loadSuperdocAssets();
+      // The vendored IIFE exposes the SuperDoc class directly as
+      // window.SuperDoc, with the other named exports (DOCX, Editor, …) hung
+      // off it as properties.
+      const SD = window.SuperDoc;
+      if (typeof SD !== 'function') throw new Error('SuperDoc failed to load');
+      const fileUrl = '/file?path=' + encodeURIComponent(doc.path) + (bust ? '&' + bust : '');
+      const r = await fetch(fileUrl, { cache: 'no-store' });
+      if (!r.ok) throw new Error('HTTP ' + r.status);
+      const buf = await r.arrayBuffer();
+      const file = new File([buf], doc.name, { type: SD.DOCX || 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' });
+
+      const sd = new SD({
+        selector: host,
+        toolbar: '#docx-toolbar',
+        documentMode: 'editing',
+        documents: [{ id: 'doc-' + doc.path, type: 'docx', data: file }],
+        onReady: () => {
+          _docxSaveFn = doSave;
+          // Defer ready past this tick so load-time editor-update events
+          // (fired while the document hydrates) don't mark it dirty.
+          setTimeout(() => { _docxReady = true; }, 0);
+        },
+      });
+      _activeSuperdoc = sd;
+      _docxDoc = doc;
+      sd.on('editor-update', markDirty);
+    } catch (err) {
+      host.innerHTML = '';
+      wrap.appendChild(el('div', { class: 'empty' }, 'Could not render document: ' + escapeHtml(err.message)));
+    }
+  }
+
   // ---------- document view ----------
   // Shared title + metadata header used by every viewer kind.
   function docHead(doc) {
@@ -1334,9 +1468,11 @@
   async function renderDoc(doc, anchor, opts) {
     renderBreadcrumb();
     const viewer = $('#viewer');
-    // Tear down any live spreadsheet before clearing the DOM — Univer keeps
-    // internal services/listeners that emptying #viewer alone won't release.
+    // Tear down any live spreadsheet/docx editor before clearing the DOM —
+    // Univer and SuperDoc keep internal services/listeners that emptying
+    // #viewer alone won't release.
     disposeSpreadsheet();
+    disposeSuperdoc();
     viewer.innerHTML = '';
     const kind = docKind(doc);
     const reload = !!(opts && opts.reload);
@@ -1384,6 +1520,11 @@
 
     if (kind === 'sheet') {
       await renderSpreadsheet(doc, viewer, bust);
+      return;
+    }
+
+    if (kind === 'docx') {
+      await renderDocx(doc, viewer, bust);
       return;
     }
 
@@ -1704,6 +1845,11 @@
       _sheetSaveFn();
       return;
     }
+    if (meta && ev.key === 's' && _docxSaveFn) {
+      ev.preventDefault();
+      _docxSaveFn();
+      return;
+    }
     // Cmd/Ctrl + +, -, 0 — zoom controls
     if (meta && (ev.key === '=' || ev.key === '+')) { ev.preventDefault(); zoomIn(); return; }
     if (meta && ev.key === '-') { ev.preventDefault(); zoomOut(); return; }
@@ -2019,7 +2165,7 @@
       const s = state.index.stats;
       const generated = state.index.generatedAt ? new Date(state.index.generatedAt).toLocaleString() : '—';
       const rowsData = [
-        ['Documents', `${s.docCount} (${s.md} md, ${s.html} html, ${s.pdf || 0} pdf, ${s.xls || 0} sheets)`],
+        ['Documents', `${s.docCount} (${s.md} md, ${s.html} html, ${s.pdf || 0} pdf, ${s.xls || 0} sheets, ${s.docx || 0} docx)`],
         ['Folders', String(s.folderCount)],
         ['Generated', generated],
       ];
@@ -2187,9 +2333,10 @@
   // routing them all through the async uiConfirm would require awaiting at every
   // call site, so we keep this one synchronous.
   function confirmDiscardEdits() {
-    // A dirty spreadsheet uses the same nav guard as the markdown editor so
-    // every navigation chokepoint protects unsaved cell edits too.
+    // A dirty spreadsheet / docx uses the same nav guard as the markdown
+    // editor so every navigation chokepoint protects unsaved edits too.
     if (isSheetDirty() && !confirm('You have unsaved spreadsheet changes. Discard them?')) return false;
+    if (isDocxDirty() && !confirm('You have unsaved document changes. Discard them?')) return false;
     if (!state.editor) return true;
     if (!isEditorDirty()) { destroyEditor(); return true; }
     if (confirm('You have unsaved changes. Discard them?')) { destroyEditor(); return true; }
@@ -3913,7 +4060,7 @@
   // recursive stats. Cheap — runs over already-loaded index data.
   function computeFolderStats(node) {
     let folders = 0, docs = 0, totalSize = 0, latestMtime = 0;
-    const byKind = { md: 0, html: 0, pdf: 0, sheet: 0, other: 0 };
+    const byKind = { md: 0, html: 0, pdf: 0, sheet: 0, docx: 0, other: 0 };
     const visit = (n) => {
       for (const d of n.docs) {
         docs++;
@@ -3924,6 +4071,7 @@
         else if (ext === 'html' || ext === 'htm') byKind.html++;
         else if (ext === 'pdf') byKind.pdf++;
         else if (ext === 'csv' || ext === 'xlsx') byKind.sheet++;
+        else if (ext === 'docx') byKind.docx++;
         else byKind.other++;
       }
       for (const ch of n.children.values()) {
@@ -3965,6 +4113,7 @@
       ['HTML',     stats.byKind.html],
       ['PDF',      stats.byKind.pdf],
       ['Sheets',   stats.byKind.sheet],
+      ['Word',     stats.byKind.docx],
       ['Other',    stats.byKind.other],
     ];
     for (const [label, n] of kinds) {

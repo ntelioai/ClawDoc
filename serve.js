@@ -163,6 +163,7 @@ const MIME = {
   '.txt': 'text/plain; charset=utf-8',
   '.csv': 'text/csv; charset=utf-8',
   '.xlsx': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+  '.docx': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
   '.png': 'image/png',
   '.jpg': 'image/jpeg',
   '.jpeg': 'image/jpeg',
@@ -468,17 +469,17 @@ function handleSave(req, res, query) {
   if (!r) return sendText(res, 403, '{"error":"forbidden or unknown workspace"}', 'application/json');
   const fp = r.fp;
   const ext = path.extname(fp).toLowerCase();
-  // Saveable kinds: markdown (text), plus the spreadsheet round-trips from
-  // issue #24 — .csv (text) and .xlsx (binary). Everything else stays
-  // read-only. xlsx is binary, so we never utf8-decode the body for any kind:
-  // the raw request bytes are written through verbatim, which is byte-exact
-  // for text too.
-  const SAVEABLE = new Set(['.md', '.markdown', '.csv', '.xlsx']);
+  // Saveable kinds: markdown (text), plus the binary round-trips —
+  // .csv (text) and .xlsx (binary) from #24, and .docx (binary) from #27.
+  // Everything else stays read-only. We never utf8-decode the body for any
+  // kind: the raw request bytes are written through verbatim, which is
+  // byte-exact for text too and lossless for binary office files.
+  const SAVEABLE = new Set(['.md', '.markdown', '.csv', '.xlsx', '.docx']);
   if (!SAVEABLE.has(ext)) {
-    return sendText(res, 400, '{"error":"only .md / .markdown / .csv / .xlsx files can be saved"}', 'application/json');
+    return sendText(res, 400, '{"error":"only .md / .markdown / .csv / .xlsx / .docx files can be saved"}', 'application/json');
   }
 
-  const MAX = 10 * 1024 * 1024; // 10 MB cap (covers xlsx binaries too)
+  const MAX = 10 * 1024 * 1024; // 10 MB cap (covers xlsx/docx binaries too)
   const chunks = [];
   let size = 0;
   req.on('data', (chunk) => {

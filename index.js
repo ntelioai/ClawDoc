@@ -78,6 +78,8 @@ const IMAGE_EXTS = new Set(['.png', '.jpg', '.jpeg', '.gif', '.svg', '.webp', '.
 // Spreadsheets (#24): rendered/edited in the Univer grid. .csv is also text,
 // so its body is indexed for search; .xlsx is binary.
 const SHEET_EXTS = new Set(['.csv', '.xlsx']);
+// Word documents (#27): rendered/edited in the SuperDoc editor. Binary.
+const DOCX_EXTS = new Set(['.docx']);
 // Plain-text-ish files: rendered as monospace, body extracted so search works.
 const TEXT_EXTS = new Set([
   '.txt', '.text', '.tsv', '.json', '.jsonc', '.yaml', '.yml', '.xml',
@@ -96,6 +98,7 @@ function fileKind(ext) {
   if (PDF_EXTS.has(ext)) return 'pdf';
   if (IMAGE_EXTS.has(ext)) return 'image';
   if (SHEET_EXTS.has(ext)) return 'sheet';
+  if (DOCX_EXTS.has(ext)) return 'docx';
   if (TEXT_EXTS.has(ext)) return 'text';
   return 'binary';
 }
@@ -323,6 +326,7 @@ function main() {
       html: docs.filter(d => d.kind === 'html').length,
       pdf: docs.filter(d => d.kind === 'pdf').length,
       xls: docs.filter(d => d.kind === 'sheet').length,
+      docx: docs.filter(d => d.kind === 'docx').length,
       image: docs.filter(d => d.kind === 'image').length,
       text: docs.filter(d => d.kind === 'text').length,
       binary: docs.filter(d => d.kind === 'binary').length,
@@ -332,7 +336,7 @@ function main() {
   fs.writeFileSync(INDEX_PATH, JSON.stringify(index));
   const rootSummary = ROOTS.map(r => r.name + ' → ' + r.path).join(', ');
   const s = index.stats;
-  console.log(`clawdoc: indexed ${docs.length} docs (${s.md} md, ${s.html} html, ${s.pdf} pdf, ${s.xls} sheets, ${s.image} image, ${s.text} text, ${s.binary} other) across ${folders.size} folders in ${s.durationMs}ms`);
+  console.log(`clawdoc: indexed ${docs.length} docs (${s.md} md, ${s.html} html, ${s.pdf} pdf, ${s.xls} sheets, ${s.docx} docx, ${s.image} image, ${s.text} text, ${s.binary} other) across ${folders.size} folders in ${s.durationMs}ms`);
   console.log(`        roots: ${rootSummary}`);
   console.log(`        -> ${INDEX_PATH}`);
 }
