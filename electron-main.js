@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 // Electron entry for ClawDoc. Boots the existing Node server in-process, then
 // opens a BrowserWindow pointing at the local URL.
 //

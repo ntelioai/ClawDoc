@@ -5,10 +5,16 @@
   "description": "Local Markdown/HTML/PDF doc browser with an embedded Claude Code terminal.",
   "license": "AGPL-3.0-only",
   "author": {
-    "name": "Ntelio LLC / Rabih Nassar",
+    "name": "Ntelio LLC",
     "email": "rabih@ntelio.ai",
     "url": "https://ntelio.ai/"
   },
+  "contributors": [
+    {
+      "name": "Rabih Nassar",
+      "email": "rabih@ntelio.ai"
+    }
+  ],
   "homepage": "https://ntelio.ai/clawdoc.html",
   "repository": {
     "type": "git",

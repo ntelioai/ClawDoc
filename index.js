@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+// SPDX-License-Identifier: AGPL-3.0-only
 // ClawDoc index generator — walks the workspace and produces index.json
 // Run: node index.js
 

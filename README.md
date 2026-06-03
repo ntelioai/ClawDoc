@@ -129,4 +129,5 @@ ClawDoc is released under the [GNU Affero General Public License, version 3](LIC
 
 In short: you can use, modify, and self-host ClawDoc freely. If you offer it as a hosted service or distribute a modified version, the AGPL requires you to make the corresponding source code available to your users under the same license. For a non-AGPL commercial license, contact [rabih@ntelio.ai](mailto:rabih@ntelio.ai).
 
-Copyright © 2026 Ntelio LLC.
+Copyright © 2026 Ntelio LLC
+Copyright © 2026 Rabih Nassar

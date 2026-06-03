@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 /* ClawDoc — browser app */
 (function () {
   'use strict';
@@ -2761,6 +2762,30 @@
     clearAllRow.appendChild(allBtn);
     resetSection.appendChild(clearAllRow);
     body.appendChild(resetSection);
+
+    // ---- About ----
+    const aboutSection = el('div', { class: 'settings-section' });
+    aboutSection.appendChild(el('h3', null, 'About'));
+    const aboutBody = el('div', { class: 'settings-help' });
+    const ver = (state.index && state.index.appVersion) || (window.CLAWDOC_VERSION) || '0.1.0';
+    aboutBody.appendChild(el('div', null, 'ClawDoc ' + ver));
+    aboutBody.appendChild(el('div', null, 'Copyright © 2026 Ntelio LLC'));
+    aboutBody.appendChild(el('div', null, 'Copyright © 2026 Rabih Nassar'));
+    const licWrap = el('div');
+    licWrap.appendChild(document.createTextNode('Licensed under '));
+    const licLink = el('a', {
+      href: 'https://github.com/ntelioai/ClawDoc/blob/main/LICENSE',
+      target: '_blank',
+      rel: 'noopener',
+    }, 'AGPL-3.0-only');
+    licWrap.appendChild(licLink);
+    licWrap.appendChild(document.createTextNode('. For a commercial license, contact '));
+    const mailLink = el('a', { href: 'mailto:rabih@ntelio.ai' }, 'rabih@ntelio.ai');
+    licWrap.appendChild(mailLink);
+    licWrap.appendChild(document.createTextNode('.'));
+    aboutBody.appendChild(licWrap);
+    aboutSection.appendChild(aboutBody);
+    body.appendChild(aboutSection);
   }
 
   // ---------- zoom ----------

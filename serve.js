@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+// SPDX-License-Identifier: AGPL-3.0-only
 // ClawDoc local server — serves the UI and proxies workspace file reads.
 // Run: node serve.js
 
