@@ -146,6 +146,119 @@
   const debounce = (fn, ms) => {
     let t; return (...a) => { clearTimeout(t); t = setTimeout(() => fn(...a), ms); };
   };
+
+  // ---------- multi-selection model (#38) ----------
+  // A selection set of workspace-prefixed paths, decoupled from the routing
+  // "currently open doc/folder". `anchor` is the range pivot, `lead` the
+  // keyboard cursor, `order` the current view's visual ordering (set by the
+  // renderer) so Shift-range and arrow-keys follow what the user sees.
+  state.selection = { paths: new Set(), anchor: null, lead: null, order: [] };
+  const selection = {
+    has(p) { return state.selection.paths.has(p); },
+    size() { return state.selection.paths.size; },
+    list() { return [...state.selection.paths]; },
+    setOrder(arr) { state.selection.order = arr.slice(); },
+    _after() { applySelectionStyles(); updateSelStatus(); },
+    clear() {
+      if (!state.selection.paths.size && !state.selection.lead) return;
+      state.selection.paths.clear();
+      state.selection.anchor = state.selection.lead = null;
+      this._after();
+    },
+    single(p) {
+      state.selection.paths = new Set([p]);
+      state.selection.anchor = state.selection.lead = p;
+      this._after();
+    },
+    toggle(p) {
+      const s = state.selection.paths;
+      if (s.has(p)) s.delete(p); else s.add(p);
+      state.selection.anchor = state.selection.lead = p;
+      this._after();
+    },
+    range(to, additive) {
+      const order = state.selection.order;
+      const a = state.selection.anchor != null ? state.selection.anchor : to;
+      let i = order.indexOf(a), j = order.indexOf(to);
+      if (i < 0 || j < 0) { this.single(to); return; }
+      if (i > j) { const t = i; i = j; j = t; }
+      const span = order.slice(i, j + 1);
+      state.selection.paths = additive
+        ? new Set([...state.selection.paths, ...span])
+        : new Set(span);
+      state.selection.lead = to;
+      this._after();
+    },
+    selectAll() {
+      state.selection.paths = new Set(state.selection.order);
+      state.selection.lead = state.selection.order[state.selection.order.length - 1] || null;
+      this._after();
+    },
+  };
+
+  // Reflect the selection onto any rendered row carrying data-sel-path. Done by
+  // class toggling (not re-render) so selecting stays cheap and never disturbs
+  // scroll/focus. `.selected` = in the set; `.sel-lead` = the keyboard cursor.
+  function applySelectionStyles() {
+    document.querySelectorAll('[data-sel-path]').forEach((row) => {
+      const p = row.getAttribute('data-sel-path');
+      row.classList.toggle('selected', state.selection.paths.has(p));
+      row.classList.toggle('sel-lead', p === state.selection.lead && state.selection.paths.size > 1);
+    });
+  }
+  function updateSelStatus() {
+    const n = state.selection.paths.size;
+    if (n > 1) setStatus(n + ' selected');
+  }
+
+  // Shared modifier-aware click logic for a file row. Returns true if the click
+  // was a selection gesture (caller should NOT also open/navigate); false for a
+  // plain click (caller proceeds with its open/navigate — single-click-open is
+  // preserved). Always leaves a sensible single selection on a plain click.
+  function selectionClick(ev, path) {
+    if (ev.metaKey || ev.ctrlKey) { selection.range && (ev.shiftKey ? selection.range(path, true) : selection.toggle(path)); return true; }
+    if (ev.shiftKey) { selection.range(path, false); return true; }
+    selection.single(path);
+    return false;
+  }
+  // For context menus: if you right-click outside the current selection, reset
+  // to just that row (Finder behaviour); inside it, keep the multi-selection.
+  function selectionForContext(path) {
+    if (!selection.has(path)) selection.single(path);
+    return selection.list();
+  }
+
+  function scrollLeadIntoView() {
+    const lead = state.selection.lead;
+    if (!lead) return;
+    const row = document.querySelector('[data-sel-path="' + (window.CSS && CSS.escape ? CSS.escape(lead) : lead) + '"]');
+    if (row) row.scrollIntoView({ block: 'nearest' });
+  }
+  function openSelPath(path) {
+    if (state.nodesByPath && state.nodesByPath.has(path)) selectFolder(path);
+    else if (state.docsByPath.has(path)) selectDoc(path);
+  }
+  // Keyboard for the file listing when it's the focused surface (#38). Returns
+  // true if the key was handled.
+  function handleListKeydown(ev) {
+    const order = state.selection.order;
+    const meta = ev.metaKey || ev.ctrlKey;
+    if (meta && (ev.key === 'a' || ev.key === 'A')) { ev.preventDefault(); selection.selectAll(); return true; }
+    if (ev.key === 'Escape') { if (selection.size()) { ev.preventDefault(); selection.clear(); return true; } return false; }
+    if (ev.key === 'ArrowDown' || ev.key === 'ArrowUp') {
+      ev.preventDefault();
+      const delta = ev.key === 'ArrowDown' ? 1 : -1;
+      let idx = order.indexOf(state.selection.lead);
+      if (idx < 0) idx = delta > 0 ? -1 : 0;
+      const target = order[Math.max(0, Math.min(order.length - 1, idx + delta))];
+      if (!target) return true;
+      if (ev.shiftKey) selection.range(target, false); else selection.single(target);
+      scrollLeadIntoView();
+      return true;
+    }
+    if (ev.key === 'Enter' && state.selection.lead) { ev.preventDefault(); openSelPath(state.selection.lead); return true; }
+    return false;
+  }
   const escapeHtml = (s) => String(s).replace(/[&<>"']/g, c => ({
     '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'
   })[c]);
@@ -969,6 +1082,9 @@
   // ---------- folder view ----------
   function renderFolder(folderPath) {
     renderBreadcrumb();
+    // Selection is per-view: changing folder clears it (#38). A pure reindex
+    // re-renders the same folder and re-applies styles via setOrder below.
+    if (state._selFolder !== folderPath) { selection.clear(); state._selFolder = folderPath; }
     const node = state.nodesByPath.get(folderPath);
     const viewer = $('#viewer');
     viewer.innerHTML = '';
@@ -1015,7 +1131,7 @@
       view.appendChild(el('div', { class: 'section-label' }, 'Folders'));
       const list = el('div', { class: 'row-list' });
       for (const ch of childFolders) {
-        const row = el('a', { class: 'row folder', href: '#folder=' + encodeURIComponent(ch.path), draggable: 'true' });
+        const row = el('a', { class: 'row folder', href: '#folder=' + encodeURIComponent(ch.path), draggable: 'true', dataset: { selPath: ch.path } });
         row.appendChild(el('span', { class: 'ricon', html: ICON_FOLDER }));
         const tit = el('div', { class: 'rtitle' });
         tit.appendChild(el('div', { class: 'rname' }, ch.name));
@@ -1024,7 +1140,16 @@
         row.appendChild(el('div', { class: 'rdate' }, ''));
         row.appendChild(el('div', { class: 'rtype' }, ch.docCount + ' docs'));
         row.appendChild(el('div', { class: 'rsize' }, ''));
-        row.addEventListener('click', (ev) => { ev.preventDefault(); selectFolder(ch.path); });
+        row.addEventListener('click', (ev) => {
+          ev.preventDefault();
+          if (selectionClick(ev, ch.path)) return;
+          selectFolder(ch.path);
+        });
+        row.addEventListener('contextmenu', (ev) => {
+          ev.preventDefault();
+          selectionForContext(ch.path);
+          showFolderContextMenu(ch, ev.clientX, ev.clientY);
+        });
         // Drag this subfolder out (onto a tree folder), and accept items
         // dropped onto it. Same helpers the left tree uses.
         attachMcDrag(row, ch.path);
@@ -1046,6 +1171,10 @@
     }
 
     viewer.appendChild(view);
+    // Selection order = the rows' visual (DOM) order, so Shift-range and arrow
+    // keys follow exactly what's on screen (current sort included).
+    selection.setOrder([...view.querySelectorAll('[data-sel-path]')].map(e => e.getAttribute('data-sel-path')));
+    applySelectionStyles();
   }
 
   function sortDocs(docs) {
@@ -1067,6 +1196,7 @@
       href: '#doc=' + encodeURIComponent(d.path),
       title: docTooltip(d),
       draggable: 'true',
+      dataset: { selPath: d.path },
     });
     row.appendChild(el('span', { class: 'ricon', html: icon }));
     const tit = el('div', { class: 'rtitle' });
@@ -1076,12 +1206,18 @@
     row.appendChild(el('div', { class: 'rdate' }, d.date || ''));
     row.appendChild(el('div', { class: 'rtype' }, d.docType || d.ext));
     row.appendChild(el('div', { class: 'rsize' }, formatSize(d.size)));
-    row.addEventListener('click', (ev) => { ev.preventDefault(); selectDoc(d.path); });
+    row.addEventListener('click', (ev) => {
+      ev.preventDefault();
+      // Modifier click = selection gesture only; plain click selects + opens.
+      if (selectionClick(ev, d.path)) return;
+      selectDoc(d.path);
+    });
     row.addEventListener('contextmenu', (ev) => {
       ev.preventDefault();
+      selectionForContext(d.path);
       showDocContextMenu(d, ev.clientX, ev.clientY);
     });
-    // Drag this document onto a folder in the left tree (or a subfolder row) to move it.
+    // Drag this document (or the whole selection) onto a folder to move it.
     attachMcDrag(row, d.path);
     return row;
   }
@@ -1871,6 +2007,17 @@
     if (state.isEmbed) return;
     const inField = ['INPUT', 'TEXTAREA'].includes(document.activeElement.tagName) || document.activeElement.isContentEditable;
     const meta = ev.metaKey || ev.ctrlKey;
+    // #38 — file-listing keyboard (arrows/shift/Cmd+A/Esc/Enter). Only when the
+    // listing is the active surface and no overlay/input has focus, so it never
+    // shadows the search / quick-open arrow handling below.
+    if (!inField
+        && $('#search-results').classList.contains('hidden')
+        && $('#quick-open').classList.contains('hidden')
+        && document.querySelector('.folder-view')
+        && state.selection.order.length
+        && handleListKeydown(ev)) {
+      return;
+    }
     if (meta && ev.key === 's' && state.editor) {
       ev.preventDefault();
       if (state.editorSaveFn) state.editorSaveFn();
@@ -3887,9 +4034,15 @@
   // instead and feed it to setDragImage. Kept around so dragend can remove it.
   let mcDragGhost = null;
 
-  function makeDragGhost(prefixedPath) {
-    const name = prefixedPath.split('/').pop() || prefixedPath;
-    const ghost = el('div', { class: 'mc-drag-ghost' }, name);
+  // The set of paths the current drag is moving — the whole selection when the
+  // grabbed row is part of a multi-selection, else just that row (#38).
+  let mcDragPaths = [];
+
+  function makeDragGhost(prefixedPath, count) {
+    const name = count > 1
+      ? count + ' items'
+      : (prefixedPath.split('/').pop() || prefixedPath);
+    const ghost = el('div', { class: 'mc-drag-ghost' + (count > 1 ? ' mc-drag-ghost-multi' : '') }, name);
     // Must be in the DOM (and on-screen-ish) for setDragImage to snapshot it,
     // but pushed off the visible area so it never flashes.
     ghost.style.position = 'absolute';
@@ -3910,19 +4063,27 @@
     if (row.getAttribute('draggable') === 'false') return;
     row.addEventListener('dragstart', (ev) => {
       mcDragPath = prefixedPath;
+      // Drag the whole selection if this row is part of a multi-selection;
+      // otherwise just this row (and make it the selection).
+      if (selection.has(prefixedPath) && selection.size() > 1) {
+        mcDragPaths = selection.list();
+      } else {
+        mcDragPaths = [prefixedPath];
+      }
       ev.dataTransfer.effectAllowed = 'move';
       try { ev.dataTransfer.setData('text/x-clawdoc-path', prefixedPath); } catch {}
       // Plain-text fallback for browsers that don't accept the custom type.
       try { ev.dataTransfer.setData('text/plain', prefixedPath); } catch {}
-      // Replace the bulky default snapshot with a small filename chip.
+      // Replace the bulky default snapshot with a small chip (count if >1).
       removeDragGhost();
-      mcDragGhost = makeDragGhost(prefixedPath);
+      mcDragGhost = makeDragGhost(prefixedPath, mcDragPaths.length);
       try { ev.dataTransfer.setDragImage(mcDragGhost, 12, 12); } catch {}
       row.classList.add('mc-dragging');
     });
     row.addEventListener('dragend', () => {
       row.classList.remove('mc-dragging');
       mcDragPath = '';
+      mcDragPaths = [];
       removeDragGhost();
       // Clear any leftover drop highlights.
       document.querySelectorAll('.mc-drop-ok, .mc-drop-bad').forEach(e =>
@@ -3976,8 +4137,12 @@
         || ev.dataTransfer.getData('text/x-clawdoc-path')
         || ev.dataTransfer.getData('text/plain');
       if (!src) return;
-      if (destFolderPath !== '' && !mcDropAcceptable(src, destFolderPath)) return;
-      mcMove(src, destFolderPath);
+      // Move the whole drag set (selection-aware); fall back to the single src.
+      const paths = (mcDragPaths.length ? mcDragPaths : [src])
+        .filter(p => destFolderPath === '' || mcDropAcceptable(p, destFolderPath));
+      if (!paths.length) return;
+      if (paths.length === 1) mcMove(paths[0], destFolderPath);
+      else mcMoveMany(paths, destFolderPath);
     });
   }
 
@@ -4254,6 +4419,40 @@
     }
   }
 
+  // Batch move (#38) — client-side iteration over /api/move, one summary toast
+  // with partial-failure reporting. Failed items are left where they are. Undo
+  // reverses every item that actually moved, back to its original parent.
+  async function mcMoveMany(paths, destFolderPath) {
+    const destLabel = destFolderPath ? (basename(destFolderPath) || destFolderPath) : 'workspace root';
+    const toast = fileOpToast('Moving ' + paths.length + ' items…');
+    const moved = [];
+    let failed = 0;
+    for (const srcPath of paths) {
+      try {
+        const r = await fetch('/api/move', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ srcPath, destFolder: destFolderPath }),
+        });
+        const data = await r.json().catch(() => ({}));
+        if (!r.ok || !data.ok) throw new Error(data.error || ('HTTP ' + r.status));
+        if (!data.unchanged) {
+          const origParent = dirname(srcPath);
+          moved.push({ newPath: data.newPath, undoDest: origParent.includes('/') ? origParent : '' });
+        }
+      } catch { failed++; }
+    }
+    const dest = destFolderPath || '';
+    if (dest) { state.expanded.add(dest); state.mcPanes.a.expanded.add(dest); state.mcPanes.b.expanded.add(dest); persistMcPanes(); }
+    selection.clear();
+    if (!moved.length && failed) { setStatus('move failed', 'error'); toast.error('Move failed: ' + failed + ' items'); return; }
+    setStatus('moved ' + moved.length + (failed ? ' · ' + failed + ' failed' : ''), failed ? 'error' : 'ok');
+    toast.success('Moved ' + moved.length + ' items to ' + destLabel + (failed ? ' · ' + failed + ' failed' : ''), {
+      actionLabel: 'Undo',
+      onAction: async () => { for (const m of moved) { try { await fetch('/api/move', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ srcPath: m.newPath, destFolder: m.undoDest }) }); } catch {} } },
+    });
+  }
+
   // ---------- tabs ----------
   function tabLabel(t) {
     if (t.docPath) {
@@ -4451,6 +4650,10 @@
 
   function showDocContextMenu(doc, x, y) {
     const isRoot = !doc.path.includes('/'); // workspace name only — shouldn't be a doc, but defensive
+    // When the right-clicked row is inside a multi-selection, destructive ops
+    // act on the whole selection (#38).
+    const sel = selection.list();
+    const multi = sel.length > 1 && selection.has(doc.path);
     const items = [
       { label: 'Preview  ␣', onClick: () => previewDoc(doc) },
       { label: 'Open in this tab', onClick: () => selectDoc(doc.path) },
@@ -4465,13 +4668,15 @@
       { label: 'Copy path', onClick: () => navigator.clipboard.writeText(doc.path) },
     ];
     if (!isRoot) {
-      items.push(
-        '-',
-        { label: 'Rename…', onClick: () => renameNode(doc.path, doc.name, false) },
-        { label: 'Move to Trash', danger: true, onClick: () => deleteNode(doc.path, doc.name, false) },
-      );
+      items.push('-');
+      if (!multi) items.push({ label: 'Rename…', onClick: () => renameNode(doc.path, doc.name, false) });
+      items.push({
+        label: multi ? `Move ${sel.length} items to Trash` : 'Move to Trash',
+        danger: true,
+        onClick: () => (multi ? deletePaths(sel) : deleteNode(doc.path, doc.name, false)),
+      });
     }
-    showCtxMenu(x, y, items, doc.title || doc.name);
+    showCtxMenu(x, y, items, multi ? `${sel.length} items` : (doc.title || doc.name));
   }
 
   function showFolderContextMenu(node, x, y) {
@@ -4578,6 +4783,36 @@
     } catch (err) {
       toast.error('Delete failed: ' + err.message);
     }
+  }
+
+  // Batch delete (#38) — one confirmation for N items, client-side iteration
+  // over /api/delete, summary toast with partial-failure reporting. Failed
+  // items are left in place.
+  async function deletePaths(paths) {
+    if (paths.length === 1) { return deleteNode(paths[0], basename(paths[0]), false); }
+    const trashWord = (navigator.platform || '').includes('Mac') ? 'Trash' : 'trash';
+    const ok = await uiConfirm(
+      `Move ${paths.length} items to ${trashWord}?\n\nFolders are moved with all their contents.`,
+      { title: 'Move to ' + trashWord, kind: 'danger' }
+    );
+    if (!ok) return;
+    const toast = fileOpToast('Deleting ' + paths.length + ' items…');
+    let done = 0, failed = 0;
+    for (const p of paths) {
+      try {
+        const r = await fetch('/api/delete', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ path: p }),
+        });
+        const data = await r.json().catch(() => ({}));
+        if (!r.ok || !data.ok) throw new Error(data.error || ('HTTP ' + r.status));
+        done++;
+      } catch { failed++; }
+    }
+    selection.clear();
+    if (!done && failed) { setStatus('delete failed', 'error'); toast.error('Delete failed: ' + failed + ' items'); return; }
+    setStatus('moved ' + done + ' to ' + trashWord + (failed ? ' · ' + failed + ' failed' : ''), failed ? 'error' : 'ok');
+    toast.success(done + ' items moved to ' + trashWord + (failed ? ' · ' + failed + ' failed' : ''));
   }
 
   // Queue a callback to run the next time SSE delivers an `index-changed`

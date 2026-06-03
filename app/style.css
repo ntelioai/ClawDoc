@@ -749,6 +749,13 @@ code {
 }
 .row:last-child { border-bottom: none; }
 .row:hover { background: var(--bg-hover); }
+/* #38 — multi-selection. Distinct from the routing .active highlight: a row
+   can be selected without being the open doc. .sel-lead = keyboard cursor. */
+.row.selected { background: var(--accent-soft, rgba(80,140,255,0.16)); }
+.row.selected:hover { background: var(--accent-soft, rgba(80,140,255,0.22)); }
+.row.sel-lead { box-shadow: inset 0 0 0 2px var(--accent); }
+.trow.selected { background: var(--accent-soft, rgba(80,140,255,0.16)); border-radius: 4px; }
+.trow.sel-lead { box-shadow: inset 0 0 0 2px var(--accent); border-radius: 4px; }
 .row .ricon {
   color: var(--accent);
   display: inline-flex;
@@ -2157,6 +2164,11 @@ body.mc-on .tabbar { display: none !important; }
 
 /* Compact drag image used in place of the full-width listing-row snapshot, so
    the ghost is the size of a single row and doesn't obscure drop targets. */
+.mc-drag-ghost.mc-drag-ghost-multi {
+  background: var(--accent);
+  color: #fff;
+  font-weight: 600;
+}
 .mc-drag-ghost {
   display: inline-flex;
   align-items: center;
