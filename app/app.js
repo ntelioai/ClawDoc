@@ -696,6 +696,33 @@
     persistTabs();
     renderTree();
   }
+
+  // #36 — recursively expand/collapse only the given folder's subtree, leaving
+  // every folder outside it untouched. A folder's subtree is itself plus any
+  // node whose path is prefixed by `folder/`. The empty root path ('') stands
+  // for the whole forest, so it matches every node.
+  function subtreePaths(folderPath) {
+    const prefix = folderPath ? folderPath + '/' : '';
+    const out = [];
+    for (const p of state.nodesByPath.keys()) {
+      if (p === folderPath || (prefix === '' ? p !== '' : p.startsWith(prefix))) out.push(p);
+    }
+    return out;
+  }
+  function expandSubtree(folderPath) {
+    state.expanded.add(folderPath);
+    for (const p of subtreePaths(folderPath)) state.expanded.add(p);
+    persistTabs();
+    renderTree();
+  }
+  function collapseSubtree(folderPath) {
+    for (const p of subtreePaths(folderPath)) state.expanded.delete(p);
+    // Collapse the folder itself too, but never the root ('') — losing the
+    // root would hide the entire tree.
+    if (folderPath) state.expanded.delete(folderPath);
+    persistTabs();
+    renderTree();
+  }
   function collapseAllFolders() {
     // Keep the root + the chain leading to the current selection so the user
     // never loses sight of where they are.
@@ -4400,6 +4427,8 @@
       { label: 'Open in new tab', onClick: () => newTab(null, { folder: node.path }) },
       '-',
       { label: isExpanded ? 'Collapse' : 'Expand', onClick: () => toggleNode(node.path) },
+      { label: 'Expand subtree', onClick: () => expandSubtree(node.path) },
+      { label: 'Collapse subtree', onClick: () => collapseSubtree(node.path) },
       { label: 'Reveal in Finder', onClick: () => { fetch('/api/open?path=' + encodeURIComponent(node.path)).catch(() => {}); } },
     ];
     // Copy folder — but never the workspace root pseudo-folder.
