@@ -469,6 +469,12 @@ body.resizing-sidebar * { cursor: col-resize !important; user-select: none !impo
   white-space: nowrap;
   overflow: hidden;
 }
+
+/* While a file operation (move/delete/paste) is resolving, show a busy cursor
+   over the file surfaces. Op entry points are also guarded in JS (#46). */
+body.fileop-busy #tree,
+body.fileop-busy .row-list,
+body.fileop-busy [data-pane-tree] { cursor: progress; }
 .trow:hover { background: var(--bg-hover); }
 .trow.active { background: var(--accent-soft); color: var(--accent-strong); }
 .trow.active .tname { font-weight: 500; }
@@ -1823,7 +1829,7 @@ a.agent-file-link:hover { border-bottom-style: solid; }
 .agent-insert:disabled { opacity: 0.4; cursor: default; }
 .agent-insert:not(:disabled):hover { border-color: var(--tp-accent); color: var(--tp-accent); }
 
-#chat-toggle {
+#claude-toggle {
   height: 32px;
   padding: 0 12px;
   border: 1px solid var(--border-strong);
@@ -1833,8 +1839,8 @@ a.agent-file-link:hover { border-bottom-style: solid; }
   color: var(--text);
   cursor: pointer;
 }
-#chat-toggle:hover { background: var(--bg-hover); border-color: var(--accent); }
-#chat-toggle.active { background: var(--accent); color: white; border-color: var(--accent); }
+#claude-toggle:hover { background: var(--bg-hover); border-color: var(--accent); }
+#claude-toggle.active { background: var(--accent); color: white; border-color: var(--accent); }
 
 /* ---------- preview modal (Quick Look style) ---------- */
 .preview-modal {

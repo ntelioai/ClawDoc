@@ -697,14 +697,18 @@ async function handleDelete(res, body) {
   try { stat = fs.statSync(r.fp); } catch { return sendJson(res, 404, { error: 'not found' }); }
   const kind = stat.isDirectory() ? 'folder' : 'file';
 
+  // Reconcile the panes promptly instead of waiting on chokidar (#46).
+  const nudgeReindex = () => { pendingChangedPaths.add(prefixed); scheduleReindex(); };
+
   const t = moveToUserTrash(r.fp);
-  if (t.ok) return sendJson(res, 200, { ok: true, trashed: true, kind, dest: t.dest });
+  if (t.ok) { nudgeReindex(); return sendJson(res, 200, { ok: true, trashed: true, kind, dest: t.dest }); }
 
   // Fall back to permanent delete only if the caller explicitly opted in.
   if (!body.force) return sendJson(res, 500, { error: 'move to Trash failed: ' + t.error });
   try {
     if (kind === 'folder') fs.rmSync(r.fp, { recursive: true, force: false });
     else fs.unlinkSync(r.fp);
+    nudgeReindex();
     return sendJson(res, 200, { ok: true, trashed: false, kind });
   } catch (err) {
     return sendJson(res, 500, { error: err.message });
@@ -825,10 +829,16 @@ async function handleMove(res, body) {
   }
 
   const newRel = path.relative(dest.root.path, finalFp).split(path.sep).join('/');
+  const newPath = dest.root.name + (newRel ? '/' + newRel : '');
+  // Trigger the reindex explicitly rather than waiting on chokidar so the panes
+  // reconcile promptly (and even if the FS event is missed) (#46).
+  pendingChangedPaths.add(srcPrefixed);
+  pendingChangedPaths.add(newPath);
+  scheduleReindex();
   return sendJson(res, 200, {
     ok: true,
     oldPath: srcPrefixed,
-    newPath: dest.root.name + (newRel ? '/' + newRel : ''),
+    newPath,
     kind: srcStat.isDirectory() ? 'folder' : 'file',
   });
 }
@@ -939,7 +949,14 @@ async function handleMkdir(res, body) {
   try {
     fs.mkdirSync(destFp);
     const rel = path.relative(r.root.path, destFp).split(path.sep).join('/');
-    return sendJson(res, 200, { ok: true, path: r.root.name + '/' + rel });
+    const prefixed = r.root.name + '/' + rel;
+    // Don't rely on chokidar's `addDir` here. It can be missed for a freshly
+    // created empty directory on some platforms/filesystems, leaving the new
+    // folder out of index.json so it never appears — not even after a reload
+    // (#44). Trigger the reindex explicitly so an empty folder is persisted.
+    pendingChangedPaths.add(prefixed);
+    scheduleReindex();
+    return sendJson(res, 200, { ok: true, path: prefixed });
   } catch (err) {
     return sendJson(res, 500, { error: err.message });
   }

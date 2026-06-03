@@ -49,9 +49,13 @@ Status legend: ✅ shipped · 🧪 experimental · 🛠 roadmap (not yet built)
 - ✅ **Dual-pane / Midnight-Commander mode** — two-pane file manager view. *(0.1.0)*
 - ✅ **Quick open** (`Cmd/Ctrl+P`) — fuzzy filename/title open. *(0.1.0)*
 - ✅ **Tree filter** (`Cmd/Ctrl+K`). *(0.1.0)*
-- ✅ **New File / New Folder** buttons + refreshed sidebar expand/collapse icons. *(#28)*
+- ✅ **New File / New Folder** buttons + refreshed sidebar expand/collapse icons. New folders
+  (including empty ones) appear immediately — the node is inserted optimistically and the
+  server triggers a reindex so it also survives a reload. *(#28, #44)*
 - ✅ **Drag-to-move** — drag files from the listing pane onto tree folders to move them,
-  with a compact row-sized drag image. *(#35)*
+  with a compact row-sized drag image. The source row disappears immediately (optimistic),
+  file ops are locked while a move/delete is resolving, and the server reindexes the affected
+  paths so both panes reconcile promptly. *(#35, #46)*
 - ✅ **Recursive expand/collapse of a single subtree** — the expand icon expands only the
   selected folder's subtree, not the whole tree. *(#36)*
 - ✅ **Multi-select (listing pane)** — Cmd/Ctrl-click toggle, Shift-click range, keyboard
@@ -72,8 +76,11 @@ Status legend: ✅ shipped · 🧪 experimental · 🛠 roadmap (not yet built)
 
 ## 5. Embedded Claude
 
-- ✅ **Embedded Claude terminal** (the **Claude** button) — a real PTY-backed shell
-  ([xterm.js](https://xtermjs.org/) + [node-pty](https://github.com/microsoft/node-pty))
+- ✅ **One Claude button, two clients** — a single **Claude** button in the topbar opens
+  whichever client is selected in **Settings → Claude client**. Default is the rich client;
+  the PTY terminal is opt-in. The preference is a local UI setting (`clawdoc.claudeClient`).
+- ✅ **Embedded Claude terminal** (Settings → Claude client → *Terminal (PTY)*) — a real
+  PTY-backed shell ([xterm.js](https://xtermjs.org/) + [node-pty](https://github.com/microsoft/node-pty))
   cwd'd to the active document's workspace; full interactive TUI (slash commands, permission
   modes, plan mode), inheriting the user's existing `claude` CLI login. *(0.1.0)*
 - ✅ **Insert button** — drops the focused file path into the Claude prompt (replaced the
@@ -83,12 +90,12 @@ Status legend: ✅ shipped · 🧪 experimental · 🛠 roadmap (not yet built)
   or custom) so the embedded terminal + agent can target non-Anthropic / local endpoints. The
   key is stored in `settings.json` (mode `0600`) and never returned to the client; empty = the
   Anthropic default. *(#43)*
-- 🧪 **Rich Claude client** (the **Claude ✦** button) — structured front-end over the same
-  `claude` binary in stream-json mode. Renders the conversation as message bubbles,
-  collapsible tool cards, inline diffs for Edit/Write, a permission-mode selector, and
-  clickable `file.md` links that open docs in ClawDoc. Runs side-by-side with the PTY for
-  comparison. Lazy-connects (doesn't spawn `claude` until the first message). Does **not** yet
-  match the PTY's full slash-command/REPL surface. *(#7 epic — M0–M11 delivered)*
+- 🧪 **Rich Claude client** (the default — Settings → Claude client → *Rich client*) —
+  structured front-end over the same `claude` binary in stream-json mode. Renders the
+  conversation as message bubbles, collapsible tool cards, inline diffs for Edit/Write, a
+  permission-mode selector, and clickable `file.md` links that open docs in ClawDoc.
+  Lazy-connects (doesn't spawn `claude` until the first message). Does **not** yet match the
+  PTY's full slash-command/REPL surface. *(#7 epic — M0–M11 delivered)*
   - M1 `/agent` stream-json WebSocket transport *(#9)*
   - M3 message-stream render core *(#11)* · M4 tool-use cards *(#12)* · M5 diff2html diffs *(#13)*
   - M6 inline permission prompts *(#14)* · M7 file/line links into the viewer *(#15)*
@@ -146,6 +153,8 @@ Status legend: ✅ shipped · 🧪 experimental · 🛠 roadmap (not yet built)
 - ✅ Spreadsheet/docx no longer report unsaved changes on a pristine open (the dirty-gate now
   arms on first real interaction, not a racy `setTimeout(0)`), and discarding from the nav guard
   disposes the editor so the dirty flag clears — ending the infinite "discard?" re-prompt. *(#40)*
+- ✅ Spreadsheet/docx viewer height fixed so the sheet bar / toolbar fits the viewport instead
+  of being clipped below the fold. *(f746879)*
 - ✅ Removed awkward logo highlight. *(#6)*
 - 🧪 Rich-client fixes: drop empty bubbles, accurate permission notice, neutral theme,
   @-insert across all workspaces, composer scrollbar behavior. *(part of #7)*

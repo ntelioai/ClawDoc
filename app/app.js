@@ -150,6 +150,32 @@
     let t; return (...a) => { clearTimeout(t); t = setTimeout(() => fn(...a), ms); };
   };
 
+  // ---------- file-op feedback / lock (#46) ----------
+  // Paths optimistically hidden from every listing while a move is in flight,
+  // so the source row disappears the instant the move starts (reverted on
+  // failure) instead of waiting for the reindex round-trip. The shared sort
+  // accessors (sortedChildren / sortedTreeDocs / sortDocs) filter these out.
+  const pendingMoveHidden = new Set();
+  // Counter of in-flight destructive file ops. While > 0, further
+  // move/drag/drop/paste are blocked so the user can't act on stale state.
+  let fileOpInFlight = 0;
+  function fileOpsBusy() { return fileOpInFlight > 0; }
+  function beginFileOp() { fileOpInFlight++; document.body.classList.add('fileop-busy'); }
+  function endFileOp() {
+    fileOpInFlight = Math.max(0, fileOpInFlight - 1);
+    if (!fileOpInFlight) document.body.classList.remove('fileop-busy');
+  }
+  function setMovePending(paths, on) {
+    for (const p of paths) { if (on) pendingMoveHidden.add(p); else pendingMoveHidden.delete(p); }
+  }
+  // Re-render whichever file surfaces are currently visible so an optimistic
+  // hide/unhide takes effect immediately.
+  function refreshFileViews() {
+    renderTree();
+    if (state.mcMode) renderMcMode();
+    else if (!state.currentDoc && state.currentFolder != null) renderFolder(state.currentFolder);
+  }
+
   // ---------- multi-selection model (#38) ----------
   // A selection set of workspace-prefixed paths, decoupled from the routing
   // "currently open doc/folder". `anchor` is the range pivot, `lead` the
@@ -464,6 +490,12 @@
       state.docs = data.docs || [];
       state.docsByPath = new Map(state.docs.map(d => [d.path, d]));
       state.tree = buildTree(data.folders || [], state.docs);
+      // The fresh index is authoritative: drop optimistic move-hides whose
+      // source no longer exists (the move landed). Anything still present was a
+      // failed/not-yet-applied move and stays hidden until its op resolves (#46).
+      for (const p of [...pendingMoveHidden]) {
+        if (!state.docsByPath.has(p) && !state.nodesByPath.has(p)) pendingMoveHidden.delete(p);
+      }
       // Invalidate any prior full-text index; rebuild lazily in the background
       // so first paint isn't blocked on the heavier /api/search payload (#29).
       state.search = null;
@@ -559,6 +591,20 @@
     return root;
   }
 
+  // Optimistically add a folder node (and any missing ancestors) to the live
+  // tree so a just-created folder shows immediately, before the reindex (#44).
+  // No-op if it already exists or the tree isn't built yet.
+  function insertTreeFolder(prefixed) {
+    if (!prefixed || !state.nodesByPath || state.nodesByPath.has(prefixed)) return;
+    const parentPath = dirname(prefixed);
+    let parent = state.nodesByPath.get(parentPath);
+    if (!parent) { insertTreeFolder(parentPath); parent = state.nodesByPath.get(parentPath); }
+    if (!parent) return;
+    const node = { path: prefixed, name: basename(prefixed), children: new Map(), docs: [], docCount: 0 };
+    parent.children.set(node.name, node);
+    state.nodesByPath.set(prefixed, node);
+  }
+
   function expandFolderAndAncestors(folderPath) {
     let p = folderPath;
     state.expanded.add('');
@@ -598,14 +644,16 @@
   }
 
   function sortedChildren(node) {
-    return Array.from(node.children.values()).sort((a, b) => a.name.localeCompare(b.name));
+    return Array.from(node.children.values())
+      .filter(n => !pendingMoveHidden.has(n.path))
+      .sort((a, b) => a.name.localeCompare(b.name));
   }
   function sortedTreeDocs(node) {
     // Alphabetical by title (falling back to filename). Tree sort is independent
     // of the right-pane sort control.
-    return node.docs.slice().sort((a, b) =>
-      (a.title || a.name).localeCompare(b.title || b.name)
-    );
+    return node.docs.slice()
+      .filter(d => !pendingMoveHidden.has(d.path))
+      .sort((a, b) => (a.title || a.name).localeCompare(b.title || b.name));
   }
 
   function docFilterMatches(doc, filter) {
@@ -1194,7 +1242,7 @@
       type: (a, b) => (a.docType || '').localeCompare(b.docType || '') || a.name.localeCompare(b.name),
       size: (a, b) => a.size - b.size,
     }[state.sortBy] || ((a, b) => a.name.localeCompare(b.name));
-    return docs.sort((a, b) => cmp(a, b) * dir);
+    return docs.filter(d => !pendingMoveHidden.has(d.path)).sort((a, b) => cmp(a, b) * dir);
   }
 
   function renderDocRow(d) {
@@ -2443,6 +2491,30 @@
     return section;
   }
 
+  // Which Claude client the single topbar "Claude" button opens. The rich
+  // structured client is the default; the PTY terminal is opt-in. Stored in
+  // localStorage (clawdoc.claudeClient) — see getClaudeClient/setClaudeClient.
+  function renderClaudeClientSection() {
+    const section = el('div', { class: 'settings-section' });
+    section.appendChild(el('h3', null, 'Claude client'));
+    section.appendChild(el('div', { class: 'settings-help' },
+      'Pick what the “Claude” button opens. The rich client renders messages, ' +
+      'tool calls and diffs in a structured panel. The terminal runs the full ' +
+      'Claude Code TUI in a pseudo-terminal (slash commands, plan mode).'));
+    const list = el('div', { class: 'settings-list' });
+    const row = el('div', { class: 'settings-row' });
+    row.appendChild(el('span', { class: 'sr-key' }, 'Client'));
+    const sel = el('select', { class: 'settings-input' });
+    sel.appendChild(el('option', { value: 'agent' }, 'Rich client (default)'));
+    sel.appendChild(el('option', { value: 'pty' }, 'Terminal (PTY)'));
+    sel.value = getClaudeClient();
+    sel.addEventListener('change', () => setClaudeClient(sel.value));
+    row.appendChild(sel);
+    list.appendChild(row);
+    section.appendChild(list);
+    return section;
+  }
+
   function openSettings() {
     // Snapshot the current workspace list into an editable working copy.
     const cur = (state.index && state.index.roots) || [];
@@ -2607,6 +2679,9 @@
 
     // GitHub section
     body.appendChild(gh.renderSettingsSection());
+
+    // Claude client selector (single-button routing)
+    body.appendChild(renderClaudeClientSection());
 
     // Model provider section (#43)
     body.appendChild(renderProviderSection());
@@ -3166,10 +3241,39 @@
     }));
   }
 
+  // ---- Claude client preference (single topbar button) ----
+  // One "Claude" button drives whichever client the user picked in Settings.
+  // Default is the rich structured client (#agent-panel) — the PTY terminal
+  // (#chat-panel) is opt-in. Stored as a UI pref in localStorage.
+  const CLAUDE_CLIENT_KEY = 'clawdoc.claudeClient';
+  function getClaudeClient() {
+    return localStorage.getItem(CLAUDE_CLIENT_KEY) === 'pty' ? 'pty' : 'agent';
+  }
+  function setClaudeClient(v) {
+    const next = v === 'pty' ? 'pty' : 'agent';
+    localStorage.setItem(CLAUDE_CLIENT_KEY, next);
+    // Close the now-inactive client so the single button reflects one panel.
+    if (next === 'pty') { if (agent.open) closeAgent(); }
+    else { if (chat.open) closeChat(); }
+    updateClaudeButton();
+  }
+  function updateClaudeButton() {
+    const btn = $('#claude-toggle');
+    if (!btn) return;
+    const pty = getClaudeClient() === 'pty';
+    btn.title = pty
+      ? 'Open the Claude Code terminal (PTY) for this workspace'
+      : 'Open Claude for this workspace';
+    btn.classList.toggle('active', pty ? chat.open : agent.open);
+  }
+  function toggleClaude() {
+    getClaudeClient() === 'pty' ? toggleChat() : toggleAgent();
+  }
+
   function openChat() {
     chat.open = true;
     $('#chat-panel').classList.remove('hidden');
-    $('#chat-toggle').classList.add('active');
+    $('#claude-toggle').classList.add('active');
     updateChatContext();
     // Defer init until the panel is laid out so fit() gets real dimensions.
     requestAnimationFrame(() => {
@@ -3182,7 +3286,7 @@
   function closeChat() {
     chat.open = false;
     $('#chat-panel').classList.add('hidden');
-    $('#chat-toggle').classList.remove('active');
+    if (getClaudeClient() === 'pty') $('#claude-toggle').classList.remove('active');
   }
   function toggleChat() { chat.open ? closeChat() : openChat(); }
 
@@ -3834,7 +3938,7 @@
   function openAgent() {
     agent.open = true;
     $('#agent-panel').classList.remove('hidden');
-    $('#agent-toggle').classList.add('active');
+    if (getClaudeClient() === 'agent') $('#claude-toggle').classList.add('active');
     updateAgentContext();
     ensureAgent();
     syncBothClaude();
@@ -3843,7 +3947,7 @@
   function closeAgent() {
     agent.open = false;
     $('#agent-panel').classList.add('hidden');
-    $('#agent-toggle').classList.remove('active');
+    if (getClaudeClient() === 'agent') $('#claude-toggle').classList.remove('active');
     syncBothClaude();
   }
   function toggleAgent() { agent.open ? closeAgent() : openAgent(); }
@@ -3886,7 +3990,8 @@
   }
 
   function initAgent() {
-    $('#agent-toggle').addEventListener('click', toggleAgent);
+    // The topbar "Claude" button (#claude-toggle) routes here via toggleClaude
+    // when the rich client is selected; no dedicated agent button anymore.
     $('#agent-close').addEventListener('click', closeAgent);
     $('#agent-restart').addEventListener('click', restartAgent);
     $('#agent-theme').addEventListener('click', () => applyAgentTheme(agent.theme === 'dark' ? 'light' : 'dark'));
@@ -4338,6 +4443,8 @@
   function attachMcDrag(row, prefixedPath) {
     if (row.getAttribute('draggable') === 'false') return;
     row.addEventListener('dragstart', (ev) => {
+      // Don't start a new drag while a move is still resolving (#46).
+      if (fileOpsBusy()) { ev.preventDefault(); return; }
       mcDragPath = prefixedPath;
       // Drag the whole selection if this row is part of a multi-selection;
       // otherwise just this row (and make it the selection).
@@ -4409,6 +4516,7 @@
       el.classList.remove('mc-drop-ok', 'mc-drop-bad');
       ev.preventDefault();
       ev.stopPropagation();
+      if (fileOpsBusy()) return; // a move is already in flight (#46)
       const src = mcDragPath
         || ev.dataTransfer.getData('text/x-clawdoc-path')
         || ev.dataTransfer.getData('text/plain');
@@ -4755,6 +4863,11 @@
                                      : dropWorkspace(srcPath);
     // Spinner shows immediately; it carries the request + reindex lag.
     const toast = fileOpToast('Moving “' + name + '”…');
+    // Lock further ops and optimistically drop the source row right away so it
+    // doesn't linger until the reindex catches up (#46). Reverted on failure.
+    beginFileOp();
+    setMovePending([srcPath], true);
+    refreshFileViews();
     try {
       const r = await fetch('/api/move', {
         method: 'POST',
@@ -4763,7 +4876,7 @@
       });
       const data = await r.json().catch(() => ({}));
       if (!r.ok || !data.ok) throw new Error(data.error || ('HTTP ' + r.status));
-      if (data.unchanged) { toast.dismiss(); return; }
+      if (data.unchanged) { setMovePending([srcPath], false); refreshFileViews(); toast.dismiss(); return; }
       setStatus('moved → ' + (destFolderPath || data.newPath.split('/')[0] + '/'), 'ok');
       // SSE/chokidar will refresh the panes once the indexer catches up;
       // until then, optimistically auto-expand the destination in both panes
@@ -4785,8 +4898,13 @@
         onAction: () => mcMove(data.newPath, undoDest),
       });
     } catch (err) {
+      // Revert the optimistic hide so the source row reappears.
+      setMovePending([srcPath], false);
+      refreshFileViews();
       setStatus('move failed', 'error');
       toast.error('Move failed: ' + err.message);
+    } finally {
+      endFileOp();
     }
   }
 
@@ -4796,22 +4914,34 @@
   async function mcMoveMany(paths, destFolderPath) {
     const destLabel = destFolderPath ? (basename(destFolderPath) || destFolderPath) : 'workspace root';
     const toast = fileOpToast('Moving ' + paths.length + ' items…');
+    // Lock further ops and optimistically drop every source row up front (#46).
+    // Each item is un-hidden again only if its own move fails.
+    beginFileOp();
+    setMovePending(paths, true);
+    refreshFileViews();
     const moved = [];
     let failed = 0;
-    for (const srcPath of paths) {
-      try {
-        const r = await fetch('/api/move', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ srcPath, destFolder: destFolderPath }),
-        });
-        const data = await r.json().catch(() => ({}));
-        if (!r.ok || !data.ok) throw new Error(data.error || ('HTTP ' + r.status));
-        if (!data.unchanged) {
-          const origParent = dirname(srcPath);
-          moved.push({ newPath: data.newPath, undoDest: origParent.includes('/') ? origParent : '' });
-        }
-      } catch { failed++; }
+    try {
+      for (const srcPath of paths) {
+        try {
+          const r = await fetch('/api/move', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ srcPath, destFolder: destFolderPath }),
+          });
+          const data = await r.json().catch(() => ({}));
+          if (!r.ok || !data.ok) throw new Error(data.error || ('HTTP ' + r.status));
+          if (!data.unchanged) {
+            const origParent = dirname(srcPath);
+            moved.push({ newPath: data.newPath, undoDest: origParent.includes('/') ? origParent : '' });
+          } else {
+            setMovePending([srcPath], false); // no-op move — keep it visible
+          }
+        } catch { failed++; setMovePending([srcPath], false); } // revert this one
+      }
+    } finally {
+      endFileOp();
+      refreshFileViews(); // reflect any reverted rows immediately
     }
     const dest = destFolderPath || '';
     if (dest) { state.expanded.add(dest); state.mcPanes.a.expanded.add(dest); state.mcPanes.b.expanded.add(dest); persistMcPanes(); }
@@ -5142,6 +5272,7 @@
   // Both wait for the SSE-driven reindex to refresh the tree/viewer. We don't
   // optimistically patch state — the server-side index is the source of truth.
   async function renameNode(prefixedPath, currentName, isFolder) {
+    if (fileOpsBusy()) { setStatus('a file operation is in progress', 'error'); return; }
     const newName = await uiPrompt(
       `Rename ${isFolder ? 'folder' : 'file'} "${currentName}" to:`,
       currentName,
@@ -5150,6 +5281,7 @@
     if (newName == null) return; // user cancelled
     const trimmed = newName.trim();
     if (!trimmed || trimmed === currentName) return;
+    beginFileOp();
     try {
       const r = await fetch('/api/rename', {
         method: 'POST',
@@ -5174,10 +5306,13 @@
       }
     } catch (err) {
       uiAlert('Rename failed: ' + err.message);
+    } finally {
+      endFileOp();
     }
   }
 
   async function deleteNode(prefixedPath, name, isFolder) {
+    if (fileOpsBusy()) { setStatus('a file operation is in progress', 'error'); return; }
     const trashWord = (navigator.platform || '').includes('Mac') ? 'Trash' : 'trash';
     const ok = await uiConfirm(
       `Move ${isFolder ? 'folder' : 'file'} "${name}" to ${trashWord}?` +
@@ -5186,6 +5321,10 @@
     );
     if (!ok) return;
     const toast = fileOpToast('Deleting “' + name + '”…');
+    // Lock + optimistically drop the deleted row so it doesn't linger (#46).
+    beginFileOp();
+    setMovePending([prefixedPath], true);
+    refreshFileViews();
     try {
       const r = await fetch('/api/delete', {
         method: 'POST',
@@ -5200,7 +5339,11 @@
       // also show the "this doc was removed" empty state if the user was
       // viewing the deleted file.
     } catch (err) {
+      setMovePending([prefixedPath], false); // revert the optimistic hide
+      refreshFileViews();
       toast.error('Delete failed: ' + err.message);
+    } finally {
+      endFileOp();
     }
   }
 
@@ -5209,6 +5352,7 @@
   // items are left in place.
   async function deletePaths(paths) {
     if (paths.length === 1) { return deleteNode(paths[0], basename(paths[0]), false); }
+    if (fileOpsBusy()) { setStatus('a file operation is in progress', 'error'); return; }
     const trashWord = (navigator.platform || '').includes('Mac') ? 'Trash' : 'trash';
     const ok = await uiConfirm(
       `Move ${paths.length} items to ${trashWord}?\n\nFolders are moved with all their contents.`,
@@ -5216,17 +5360,26 @@
     );
     if (!ok) return;
     const toast = fileOpToast('Deleting ' + paths.length + ' items…');
+    // Lock + optimistically drop every target row; revert any that fail (#46).
+    beginFileOp();
+    setMovePending(paths, true);
+    refreshFileViews();
     let done = 0, failed = 0;
-    for (const p of paths) {
-      try {
-        const r = await fetch('/api/delete', {
-          method: 'POST', headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ path: p }),
-        });
-        const data = await r.json().catch(() => ({}));
-        if (!r.ok || !data.ok) throw new Error(data.error || ('HTTP ' + r.status));
-        done++;
-      } catch { failed++; }
+    try {
+      for (const p of paths) {
+        try {
+          const r = await fetch('/api/delete', {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ path: p }),
+          });
+          const data = await r.json().catch(() => ({}));
+          if (!r.ok || !data.ok) throw new Error(data.error || ('HTTP ' + r.status));
+          done++;
+        } catch { failed++; setMovePending([p], false); }
+      }
+    } finally {
+      endFileOp();
+      refreshFileViews();
     }
     selection.clear();
     if (!done && failed) { setStatus('delete failed', 'error'); toast.error('Delete failed: ' + failed + ' items'); return; }
@@ -5253,8 +5406,10 @@
 
   async function pasteIntoFolder(destFolderPath) {
     if (!state.clipboard) return;
+    if (fileOpsBusy()) { setStatus('a file operation is in progress', 'error'); return; }
     const clip = state.clipboard;
     const toast = fileOpToast('Pasting “' + clip.name + '”…');
+    beginFileOp();
     try {
       const r = await fetch('/api/copy', {
         method: 'POST',
@@ -5292,6 +5447,8 @@
     } catch (err) {
       setStatus('paste failed', 'error');
       toast.error('Paste failed: ' + err.message);
+    } finally {
+      endFileOp();
     }
   }
 
@@ -5373,13 +5530,18 @@
       const data = await r.json().catch(() => ({}));
       if (!r.ok || !data.ok) throw new Error(data.error || ('HTTP ' + r.status));
       setStatus('folder created', 'ok');
-      // Optimistically expand the parent + the new folder in main tree and
-      // both MC panes so the next reindex paints it open.
+      // Optimistically insert the node so the new (empty) folder appears
+      // immediately, without waiting for the reindex round-trip (#44). The
+      // subsequent reindex reconciles harmlessly.
+      insertTreeFolder(data.path);
+      // Expand the parent + the new folder in main tree and both MC panes.
       state.expanded.add(parentPath);
       state.expanded.add(data.path);
       state.mcPanes.a.expanded.add(parentPath); state.mcPanes.a.expanded.add(data.path);
       state.mcPanes.b.expanded.add(parentPath); state.mcPanes.b.expanded.add(data.path);
       persistMcPanes();
+      renderTree();
+      if (state.mcMode) renderMcMode();
     } catch (err) {
       uiAlert('Create folder failed: ' + err.message);
     }
@@ -5553,8 +5715,10 @@
       else if (state.nodesByPath && state.nodesByPath.has(p)) selectFolder(p);
     });
 
-    // chat panel (Claude Code terminal)
-    $('#chat-toggle').addEventListener('click', toggleChat);
+    // Single "Claude" button → routes to the PTY terminal or rich client
+    // depending on the Settings preference (default: rich client).
+    $('#claude-toggle').addEventListener('click', toggleClaude);
+    updateClaudeButton();
     $('#chat-close').addEventListener('click', closeChat);
     $('#chat-restart').addEventListener('click', restartChat);
     $('#chat-theme').addEventListener('click', toggleTermTheme);
