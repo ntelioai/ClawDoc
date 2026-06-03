@@ -885,7 +885,7 @@
       view.appendChild(el('div', { class: 'section-label' }, 'Folders'));
       const list = el('div', { class: 'row-list' });
       for (const ch of childFolders) {
-        const row = el('a', { class: 'row folder', href: '#folder=' + encodeURIComponent(ch.path) });
+        const row = el('a', { class: 'row folder', href: '#folder=' + encodeURIComponent(ch.path), draggable: 'true' });
         row.appendChild(el('span', { class: 'ricon', html: ICON_FOLDER }));
         const tit = el('div', { class: 'rtitle' });
         tit.appendChild(el('div', { class: 'rname' }, ch.name));
@@ -895,6 +895,10 @@
         row.appendChild(el('div', { class: 'rtype' }, ch.docCount + ' docs'));
         row.appendChild(el('div', { class: 'rsize' }, ''));
         row.addEventListener('click', (ev) => { ev.preventDefault(); selectFolder(ch.path); });
+        // Drag this subfolder out (onto a tree folder), and accept items
+        // dropped onto it. Same helpers the left tree uses.
+        attachMcDrag(row, ch.path);
+        attachMcDrop(row, ch.path);
         list.appendChild(row);
       }
       view.appendChild(list);
@@ -934,6 +938,7 @@
       class: 'row ' + kindClass,
       href: '#doc=' + encodeURIComponent(d.path),
       title: docTooltip(d),
+      draggable: 'true',
     });
     row.appendChild(el('span', { class: 'ricon', html: icon }));
     const tit = el('div', { class: 'rtitle' });
@@ -948,6 +953,8 @@
       ev.preventDefault();
       showDocContextMenu(d, ev.clientX, ev.clientY);
     });
+    // Drag this document onto a folder in the left tree (or a subfolder row) to move it.
+    attachMcDrag(row, d.path);
     return row;
   }
 
@@ -3584,6 +3591,9 @@
       state.mcPanes.a.expanded.add(dest);
       state.mcPanes.b.expanded.add(dest);
       persistMcPanes();
+      // Same optimism for the main sidebar tree, so a file dragged from the
+      // listing pane into a tree folder lands somewhere already visible.
+      state.expanded.add(dest);
     } catch (err) {
       setStatus('move failed', 'error');
       uiAlert('Move failed: ' + err.message);
