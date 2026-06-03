@@ -67,12 +67,38 @@ const DEFAULT_IGNORES = [
   'Downloads',
 ];
 
-const TEXT_EXTS = new Set(['.md', '.markdown', '.html', '.htm', '.csv']);
-const BINARY_EXTS = new Set(['.pdf', '.xlsx']);
-const EXTS = new Set([...TEXT_EXTS, ...BINARY_EXTS]);
-const MAX_FILE_BYTES = 2 * 1024 * 1024; // skip text files > 2 MB
-const MAX_BINARY_BYTES = 100 * 1024 * 1024; // allow PDFs up to 100 MB
+// File classification. Every file is indexed and shown in the tree; `kind`
+// tells the UI how to render it (rich markdown/html, inline pdf/image,
+// editable spreadsheet, monospace text, or a graceful "no preview" card for
+// everything else).
+const MARKDOWN_EXTS = new Set(['.md', '.markdown']);
+const HTML_EXTS = new Set(['.html', '.htm']);
+const PDF_EXTS = new Set(['.pdf']);
+const IMAGE_EXTS = new Set(['.png', '.jpg', '.jpeg', '.gif', '.svg', '.webp', '.bmp', '.ico', '.avif']);
+// Spreadsheets (#24): rendered/edited in the Univer grid. .csv is also text,
+// so its body is indexed for search; .xlsx is binary.
+const SHEET_EXTS = new Set(['.csv', '.xlsx']);
+// Plain-text-ish files: rendered as monospace, body extracted so search works.
+const TEXT_EXTS = new Set([
+  '.txt', '.text', '.tsv', '.json', '.jsonc', '.yaml', '.yml', '.xml',
+  '.toml', '.ini', '.cfg', '.conf', '.log',
+  '.js', '.mjs', '.cjs', '.ts', '.tsx', '.jsx', '.css', '.scss', '.less',
+  '.py', '.rb', '.go', '.rs', '.java', '.c', '.h', '.cpp', '.hpp', '.cc',
+  '.cs', '.php', '.sh', '.bash', '.zsh', '.sql', '.r', '.lua', '.pl',
+  '.swift', '.kt', '.dart', '.vue', '.svelte',
+]);
+const MAX_FILE_BYTES = 2 * 1024 * 1024; // only read text bodies for files <= 2 MB
 const BODY_CAP = 4000;
+
+function fileKind(ext) {
+  if (MARKDOWN_EXTS.has(ext)) return 'markdown';
+  if (HTML_EXTS.has(ext)) return 'html';
+  if (PDF_EXTS.has(ext)) return 'pdf';
+  if (IMAGE_EXTS.has(ext)) return 'image';
+  if (SHEET_EXTS.has(ext)) return 'sheet';
+  if (TEXT_EXTS.has(ext)) return 'text';
+  return 'binary';
+}
 
 function readIgnoreFile() {
   const p = path.join(SCRIPT_DIR, '.clawdocignore');
@@ -201,26 +227,29 @@ function walk(dir, ignores, docs, folders, root) {
       walk(full, ignores, docs, folders, root);
     } else if (e.isFile()) {
       const ext = path.extname(e.name).toLowerCase();
-      if (!EXTS.has(ext)) continue;
       let stat;
       try { stat = fs.statSync(full); } catch { continue; }
-      const isBinary = BINARY_EXTS.has(ext);
-      if (isBinary ? stat.size > MAX_BINARY_BYTES : stat.size > MAX_FILE_BYTES) continue;
+      const kind = fileKind(ext);
+      // markdown/html/text carry searchable body text. .csv is a 'sheet' but
+      // also plain text, so its raw contents are indexed too. Images, PDFs,
+      // .xlsx and unknown binaries are indexed for the tree but never read.
+      const textual = kind === 'markdown' || kind === 'html' || kind === 'text'
+        || (kind === 'sheet' && ext === '.csv');
       let title = null, body = '', links = [];
-      if (!isBinary) {
+      if (textual && stat.size <= MAX_FILE_BYTES) {
         let content = '';
-        try { content = fs.readFileSync(full, 'utf8'); } catch { continue; }
-        const isMd = ext === '.md' || ext === '.markdown';
-        const isHtmlDoc = ext === '.html' || ext === '.htm';
-        if (isMd || isHtmlDoc) {
-          title = isMd ? extractTitleMd(content) : extractTitleHtml(content);
-          body = isMd ? plainTextFromMd(content) : plainTextFromHtml(content);
-          links = (isMd ? extractLinksMd(content) : extractLinksHtml(content))
-            .filter(l => !isExternalOrAnchor(l));
+        try { content = fs.readFileSync(full, 'utf8'); } catch { content = ''; }
+        if (kind === 'markdown') {
+          title = extractTitleMd(content);
+          body = plainTextFromMd(content);
+          links = extractLinksMd(content).filter(l => !isExternalOrAnchor(l));
+        } else if (kind === 'html') {
+          title = extractTitleHtml(content);
+          body = plainTextFromHtml(content);
+          links = extractLinksHtml(content).filter(l => !isExternalOrAnchor(l));
         } else {
-          // Other plain-text kinds (e.g. .csv): index the raw text so cell
-          // contents are searchable, but there's no title/links to extract.
-          body = content;
+          // text + .csv: index the raw contents so cell/source text is searchable.
+          body = content.replace(/\s+/g, ' ').trim();
         }
       }
       const parsed = parseFilename(e.name);
@@ -231,6 +260,7 @@ function walk(dir, ignores, docs, folders, root) {
         name: e.name,
         folder: path.dirname(prefixed),
         ext: ext.slice(1),
+        kind,
         title: title || e.name.replace(/\.[^.]+$/, ''),
         date: parsed.date || stat.mtime.toISOString().slice(0, 10),
         mdate: stat.mtime.toISOString().slice(0, 10),
@@ -289,16 +319,20 @@ function main() {
     stats: {
       docCount: docs.length,
       folderCount: folders.size,
-      md: docs.filter(d => d.ext === 'md' || d.ext === 'markdown').length,
-      html: docs.filter(d => d.ext === 'html' || d.ext === 'htm').length,
-      pdf: docs.filter(d => d.ext === 'pdf').length,
-      xls: docs.filter(d => d.ext === 'csv' || d.ext === 'xlsx').length,
+      md: docs.filter(d => d.kind === 'markdown').length,
+      html: docs.filter(d => d.kind === 'html').length,
+      pdf: docs.filter(d => d.kind === 'pdf').length,
+      xls: docs.filter(d => d.kind === 'sheet').length,
+      image: docs.filter(d => d.kind === 'image').length,
+      text: docs.filter(d => d.kind === 'text').length,
+      binary: docs.filter(d => d.kind === 'binary').length,
       durationMs: Date.now() - t0,
     },
   };
   fs.writeFileSync(INDEX_PATH, JSON.stringify(index));
   const rootSummary = ROOTS.map(r => r.name + ' → ' + r.path).join(', ');
-  console.log(`clawdoc: indexed ${docs.length} docs (${index.stats.md} md, ${index.stats.html} html, ${index.stats.pdf} pdf, ${index.stats.xls} sheets) across ${folders.size} folders in ${index.stats.durationMs}ms`);
+  const s = index.stats;
+  console.log(`clawdoc: indexed ${docs.length} docs (${s.md} md, ${s.html} html, ${s.pdf} pdf, ${s.xls} sheets, ${s.image} image, ${s.text} text, ${s.binary} other) across ${folders.size} folders in ${s.durationMs}ms`);
   console.log(`        roots: ${rootSummary}`);
   console.log(`        -> ${INDEX_PATH}`);
 }
