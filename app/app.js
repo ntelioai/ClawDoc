@@ -3274,6 +3274,30 @@
   // refuse cross-workspace drops at hover time (the path tells us the
   // workspace via its first segment).
   let mcDragPath = '';
+  // The native drag image is a snapshot of the dragged element. Listing-pane
+  // rows are full-width and tall, so the ghost ends up covering several rows
+  // and you can't see where you're aiming. We render a compact, row-sized chip
+  // instead and feed it to setDragImage. Kept around so dragend can remove it.
+  let mcDragGhost = null;
+
+  function makeDragGhost(prefixedPath) {
+    const name = prefixedPath.split('/').pop() || prefixedPath;
+    const ghost = el('div', { class: 'mc-drag-ghost' }, name);
+    // Must be in the DOM (and on-screen-ish) for setDragImage to snapshot it,
+    // but pushed off the visible area so it never flashes.
+    ghost.style.position = 'absolute';
+    ghost.style.top = '-1000px';
+    ghost.style.left = '-1000px';
+    document.body.appendChild(ghost);
+    return ghost;
+  }
+
+  function removeDragGhost() {
+    if (mcDragGhost) {
+      try { mcDragGhost.remove(); } catch {}
+      mcDragGhost = null;
+    }
+  }
 
   function attachMcDrag(row, prefixedPath) {
     if (row.getAttribute('draggable') === 'false') return;
@@ -3283,11 +3307,16 @@
       try { ev.dataTransfer.setData('text/x-clawdoc-path', prefixedPath); } catch {}
       // Plain-text fallback for browsers that don't accept the custom type.
       try { ev.dataTransfer.setData('text/plain', prefixedPath); } catch {}
+      // Replace the bulky default snapshot with a small filename chip.
+      removeDragGhost();
+      mcDragGhost = makeDragGhost(prefixedPath);
+      try { ev.dataTransfer.setDragImage(mcDragGhost, 12, 12); } catch {}
       row.classList.add('mc-dragging');
     });
     row.addEventListener('dragend', () => {
       row.classList.remove('mc-dragging');
       mcDragPath = '';
+      removeDragGhost();
       // Clear any leftover drop highlights.
       document.querySelectorAll('.mc-drop-ok, .mc-drop-bad').forEach(e =>
         e.classList.remove('mc-drop-ok', 'mc-drop-bad'));

@@ -2001,7 +2001,30 @@ body.mc-on .tabbar { display: none !important; }
 /* Drag visuals apply to both MC pane rows (.mctrow) and the main tree's
    rows (.trow) so file moving works from either surface. */
 .mctrow.mc-dragging,
-.trow.mc-dragging { opacity: 0.4; }
+.trow.mc-dragging,
+.row.mc-dragging { opacity: 0.4; }
+
+/* Compact drag image used in place of the full-width listing-row snapshot, so
+   the ghost is the size of a single row and doesn't obscure drop targets. */
+.mc-drag-ghost {
+  display: inline-flex;
+  align-items: center;
+  max-width: 240px;
+  height: 22px;
+  padding: 0 10px;
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 22px;
+  color: var(--text);
+  background: var(--bg-elev);
+  border: 1px solid var(--accent);
+  border-radius: 4px;
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.3);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  pointer-events: none;
+}
 .mctrow.mc-drop-ok,
 .trow.mc-drop-ok {
   background: var(--accent-soft);
