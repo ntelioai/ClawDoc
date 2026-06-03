@@ -14,6 +14,7 @@ compatible with ClawDoc's AGPL-3.0 distribution.
 | SuperDoc community edition (`@harbour-enterprises/superdoc`) | 1.38.0 | AGPL-3.0 | https://github.com/superdoc-dev/superdoc |
 | pandoc (via `pandoc-wasm`) | pandoc 3.9 / wrapper 1.0.1 | GPL-2.0-or-later | https://github.com/pandoc/pandoc-wasm |
 | browser_wasi_shim (`@bjorn3/browser_wasi_shim`) | 0.4.2 | MIT OR Apache-2.0 | https://github.com/bjorn3/browser_wasi_shim |
+| MiniSearch (`minisearch`) | 7.1.2 | MIT | https://github.com/lucaong/minisearch |
 
 Apache-2.0 is one-way compatible into AGPL-3.0; MIT is permissive and likewise
 compatible. The full Apache-2.0 and MIT license texts are available at the
@@ -30,3 +31,8 @@ install). Pandoc is GPL-2.0-or-later; the "or later" lets it be used under
 GPL-3.0, which is compatible with ClawDoc's AGPL-3.0 distribution. The unmodified
 `pandoc.wasm` binary is bundled with attribution. `@bjorn3/browser_wasi_shim`
 (MIT/Apache-2.0) is its required WASI runtime.
+
+MiniSearch (vendored under `app/vendor/minisearch/`, MIT) is the in-browser
+full-text search engine — stemming, fuzzy/prefix matching and BM25 ranking over
+the locally-built index. PDF body text is extracted at index time with the
+system `pdftotext` (poppler) when present; poppler is not bundled.

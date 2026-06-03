@@ -8,6 +8,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Added
 - Open-source launch scaffolding: `LICENSE` (AGPL-3.0-only), `CONTRIBUTING.md`, `SECURITY.md`, `CODE_OF_CONDUCT.md`, `.github/` issue + PR templates, and a tag-triggered cross-platform build workflow.
+- Full-text search (#29): in-browser [MiniSearch](https://github.com/lucaong/minisearch) index with stemming, typo tolerance, prefix matching and BM25 ranking, replacing the brute-force substring scan. The whole document body is now indexed (the previous 4 KB cap is gone), and PDF text is extracted at index time via `pdftotext` (poppler) when available. Full bodies are served separately from the doc list (`search.json` / `/api/search`) and the index is built lazily so first paint stays fast.
 
 ### Changed
 - Renamed all internal identifiers from `mdown` to `clawdoc`: environment variables (`CLAWDOC_ROOT`, `CLAWDOC_PORT`, `CLAWDOC_DATA_DIR`, `CLAWDOC_GITHUB_CLIENT_ID`), localStorage keys (`clawdoc.*`), drag MIME type (`text/x-clawdoc-path`), ignore file (`.clawdocignore`), atomic-write temp prefix (`.clawdoc-tmp-`), default git commit author, and log file (`clawdoc.log`).

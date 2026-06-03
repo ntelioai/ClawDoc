@@ -9,6 +9,7 @@ coverage/
 
 # ClawDoc runtime artifacts (generated in cwd during dev; in userData when packaged)
 index.json
+search.json
 settings.json
 clawdoc.log
 .clawdoc-tmp-*

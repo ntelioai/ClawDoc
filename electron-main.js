@@ -2,8 +2,8 @@
 // opens a BrowserWindow pointing at the local URL.
 //
 // Strategy:
-//  - Redirect CLAWDOC_DATA_DIR to Electron's userData so settings.json and
-//    index.json live in a writable location when packaged.
+//  - Redirect CLAWDOC_DATA_DIR to Electron's userData so settings.json,
+//    index.json and search.json live in a writable location when packaged.
 //  - On first launch (no settings.json, no CLAWDOC_ROOT), prompt the user for a
 //    workspace folder and persist it via CLAWDOC_ROOT before requiring serve.js.
 //  - Wait for the HTTP port to accept connections, then open the window.
@@ -55,7 +55,7 @@ function pickWorkspaceSync() {
 async function start() {
   await app.whenReady();
 
-  // Redirect serve.js's writable files (settings.json, index.json) to userData.
+  // Redirect serve.js's writable files (settings.json, index.json, search.json) to userData.
   const dataDir = app.getPath('userData');
   fs.mkdirSync(dataDir, { recursive: true });
   process.env.CLAWDOC_DATA_DIR = dataDir;

@@ -38,6 +38,7 @@ function terminalEnv(extra) {
 // Writable data directory — overridable so packaged apps can redirect to userData.
 const DATA_DIR = process.env.CLAWDOC_DATA_DIR || SCRIPT_DIR;
 const INDEX_PATH = path.join(DATA_DIR, 'index.json');
+const SEARCH_PATH = path.join(DATA_DIR, 'search.json');
 const PORT = Number(process.env.CLAWDOC_PORT || 7878);
 
 const SETTINGS_PATH = path.join(DATA_DIR, 'settings.json');
@@ -277,6 +278,16 @@ const server = http.createServer((req, res) => {
       return sendText(res, 404, '{"error":"no index yet"}', 'application/json; charset=utf-8');
     }
     return sendFile(res, INDEX_PATH);
+  }
+
+  // Full-body search payload (#29). Lazily fetched by the client to build the
+  // in-browser MiniSearch index; kept separate from /api/index so first paint
+  // isn't blocked on the heavier full-text bytes.
+  if (req.method === 'GET' && pathname === '/api/search') {
+    if (!fs.existsSync(SEARCH_PATH)) {
+      return sendText(res, 404, '{"error":"no search index yet"}', 'application/json; charset=utf-8');
+    }
+    return sendFile(res, SEARCH_PATH);
   }
 
   if (req.method === 'POST' && pathname === '/api/reindex') {
@@ -963,7 +974,7 @@ function shouldIgnoreEvent(absPath) {
   if (!base) return false;
   // Self-loops: index.json is rewritten on every reindex; the temp file from
   // our atomic save would otherwise fire a noisy add+unlink burst.
-  if (base === 'index.json' || base === 'settings.json') return true;
+  if (base === 'index.json' || base === 'search.json' || base === 'settings.json') return true;
   if (base.startsWith('.') && base !== '.') return true;     // dotfiles
   if (base.includes('.clawdoc-tmp-')) return true;             // our own atomic-write tmp
   if (base === 'node_modules' || base === '.git') return true;

@@ -4,12 +4,16 @@
 
 const fs = require('fs');
 const path = require('path');
+const { execFileSync } = require('child_process');
 
 const SCRIPT_DIR = __dirname;
 // Writable data directory — overridable so packaged apps can redirect to userData.
 const DATA_DIR = process.env.CLAWDOC_DATA_DIR || SCRIPT_DIR;
 // Index file stays alongside the ClawDoc scripts, regardless of workspace.
 const INDEX_PATH = path.join(DATA_DIR, 'index.json');
+// Full-body search payload (#29). Kept separate from index.json so the doc
+// list stays lean — index.json ships short previews, search.json the full text.
+const SEARCH_PATH = path.join(DATA_DIR, 'search.json');
 
 // Parse one or more -p / --path flags from argv. Returns absolute paths.
 // Falls back to settings.json (written by serve.js / the UI), then
@@ -90,7 +94,11 @@ const TEXT_EXTS = new Set([
   '.swift', '.kt', '.dart', '.vue', '.svelte',
 ]);
 const MAX_FILE_BYTES = 2 * 1024 * 1024; // only read text bodies for files <= 2 MB
-const BODY_CAP = 4000;
+const MAX_PDF_BYTES = 25 * 1024 * 1024; // extract PDF text for files <= 25 MB
+// Full body text is indexed for search (#29). docs[] carries only a short
+// preview (the doc list is iterated everywhere and held in memory); the full
+// body lives in search.json and powers the in-browser MiniSearch index.
+const BODY_PREVIEW = 300;
 
 function fileKind(ext) {
   if (MARKDOWN_EXTS.has(ext)) return 'markdown';
@@ -183,6 +191,24 @@ function plainTextFromHtml(content) {
     .trim();
 }
 
+// PDF text extraction at index time (#29). Uses the system `pdftotext`
+// (poppler) when present; without it, PDFs fall back to metadata-only indexing.
+let _pdftotext = null;
+function hasPdftotext() {
+  if (_pdftotext !== null) return _pdftotext;
+  try { execFileSync('pdftotext', ['-v'], { stdio: 'ignore' }); _pdftotext = true; }
+  catch { _pdftotext = false; }
+  return _pdftotext;
+}
+
+function plainTextFromPdf(full) {
+  try {
+    const out = execFileSync('pdftotext', ['-q', '-enc', 'UTF-8', full, '-'],
+      { maxBuffer: 64 * 1024 * 1024, timeout: 30000 });
+    return out.toString('utf8').replace(/\s+/g, ' ').trim();
+  } catch { return ''; }
+}
+
 function extractLinksMd(content) {
   const out = [];
   const reLink = /\[[^\]]*\]\(([^)]+)\)/g;
@@ -215,7 +241,7 @@ function isExternalOrAnchor(href) {
   return /^([a-z][a-z0-9+.-]*:|#|mailto:|tel:)/i.test(href);
 }
 
-function walk(dir, ignores, docs, folders, root) {
+function walk(dir, ignores, docs, folders, root, fullBodies) {
   let entries;
   try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch { return; }
   for (const e of entries) {
@@ -227,7 +253,7 @@ function walk(dir, ignores, docs, folders, root) {
     const prefixed = root.name + '/' + rel;
     if (e.isDirectory()) {
       folders.add(prefixed);
-      walk(full, ignores, docs, folders, root);
+      walk(full, ignores, docs, folders, root, fullBodies);
     } else if (e.isFile()) {
       const ext = path.extname(e.name).toLowerCase();
       let stat;
@@ -254,7 +280,12 @@ function walk(dir, ignores, docs, folders, root) {
           // text + .csv: index the raw contents so cell/source text is searchable.
           body = content.replace(/\s+/g, ' ').trim();
         }
+      } else if (kind === 'pdf' && stat.size <= MAX_PDF_BYTES && hasPdftotext()) {
+        // PDFs are now searchable by their extracted text, not just filename (#29).
+        body = plainTextFromPdf(full);
       }
+      // Full body powers search.json; index.json keeps only a short preview.
+      if (body) fullBodies.set(prefixed, body);
       const parsed = parseFilename(e.name);
       docs.push({
         path: prefixed,
@@ -271,7 +302,7 @@ function walk(dir, ignores, docs, folders, root) {
         docType: parsed.docType,
         size: stat.size,
         mtime: stat.mtimeMs,
-        body: body.slice(0, BODY_CAP),
+        body: body.slice(0, BODY_PREVIEW),
         bodyLen: body.length,
         links,
       });
@@ -300,6 +331,7 @@ function main() {
   const ignores = [...DEFAULT_IGNORES, ...readIgnoreFile()];
   const docs = [];
   const folders = new Set();
+  const fullBodies = new Map();
   const t0 = Date.now();
 
   for (const root of ROOTS) {
@@ -309,7 +341,7 @@ function main() {
     if (scriptRel && !scriptRel.startsWith('..') && !path.isAbsolute(scriptRel)) {
       rootIgnores.push(scriptRel);
     }
-    walk(root.path, rootIgnores, docs, folders, root);
+    walk(root.path, rootIgnores, docs, folders, root, fullBodies);
   }
 
   buildBacklinks(docs);
@@ -330,15 +362,25 @@ function main() {
       image: docs.filter(d => d.kind === 'image').length,
       text: docs.filter(d => d.kind === 'text').length,
       binary: docs.filter(d => d.kind === 'binary').length,
+      pdfText: docs.filter(d => d.kind === 'pdf' && d.bodyLen > 0).length,
       durationMs: Date.now() - t0,
     },
   };
   fs.writeFileSync(INDEX_PATH, JSON.stringify(index));
+
+  // search.json: full body text keyed by path, consumed by the in-browser
+  // MiniSearch index. Kept out of index.json so the doc list stays lean.
+  const texts = {};
+  for (const [p, b] of fullBodies) texts[p] = b;
+  fs.writeFileSync(SEARCH_PATH, JSON.stringify({ generatedAt: index.generatedAt, texts }));
+
   const rootSummary = ROOTS.map(r => r.name + ' → ' + r.path).join(', ');
   const s = index.stats;
   console.log(`clawdoc: indexed ${docs.length} docs (${s.md} md, ${s.html} html, ${s.pdf} pdf, ${s.xls} sheets, ${s.docx} docx, ${s.image} image, ${s.text} text, ${s.binary} other) across ${folders.size} folders in ${s.durationMs}ms`);
   console.log(`        roots: ${rootSummary}`);
+  console.log(`        full-text bodies: ${fullBodies.size} (incl. ${s.pdfText} pdf)${hasPdftotext() ? '' : ' — pdftotext not found; PDFs indexed by metadata only'}`);
   console.log(`        -> ${INDEX_PATH}`);
+  console.log(`        -> ${SEARCH_PATH}`);
 }
 
 main();

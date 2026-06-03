@@ -6,6 +6,9 @@
     index: null,           // raw index.json
     docs: [],              // array of doc records
     docsByPath: new Map(), // path -> doc
+    search: null,          // MiniSearch instance (full-text), built lazily
+    searchTexts: null,     // path -> full body text (for snippets)
+    searchLoading: null,   // in-flight build promise (dedupes concurrent calls)
     tree: null,            // root tree node
     nodesByPath: new Map(),// folder path -> tree node
     expanded: new Set(),   // expanded folder paths
@@ -461,6 +464,12 @@
       state.docs = data.docs || [];
       state.docsByPath = new Map(state.docs.map(d => [d.path, d]));
       state.tree = buildTree(data.folders || [], state.docs);
+      // Invalidate any prior full-text index; rebuild lazily in the background
+      // so first paint isn't blocked on the heavier /api/search payload (#29).
+      state.search = null;
+      state.searchTexts = null;
+      state.searchLoading = null;
+      if (!state.isEmbed) ensureSearchIndex().catch(() => {});
 
       if (state.isEmbed) {
         // Embed mode: no tabs, just render whatever the URL points at.
@@ -1864,10 +1873,66 @@
   }
 
   // ---------- search ----------
+  // Field weighting intent: title > filename > path > body (#29). Shared by the
+  // MiniSearch index (field config) and search-time boosts.
+  const SEARCH_FIELDS = ['title', 'name', 'path', 'body'];
+  const SEARCH_BOOST = { title: 10, name: 8, path: 4, body: 2 };
+
+  // Light stemmer so "invoicing" and "invoice" share a stem. Applied identically
+  // at index and query time (this is the single source of truth — the index is
+  // built in-browser, so there's no Node-side copy to keep in sync). Prefix +
+  // fuzzy matching at query time covers the cases the stemmer misses.
+  function searchStem(term) {
+    const t = term.toLowerCase().replace(/[^a-z0-9]+/g, '');
+    if (!t) return null;
+    if (t.length <= 4) return t;
+    return t.replace(/(izations|ization|ations|ation|ings|ing|edly|ed|ies|ied|ly|es|s)$/, '');
+  }
+  const SEARCH_CONFIG = {
+    fields: SEARCH_FIELDS,
+    idField: 'path',
+    processTerm: searchStem,
+  };
+
+  // Build (once) the in-browser full-text index. Pulls full bodies from
+  // /api/search and joins them onto the doc records already in memory.
+  function ensureSearchIndex() {
+    if (state.search) return Promise.resolve(state.search);
+    if (state.searchLoading) return state.searchLoading;
+    state.searchLoading = (async () => {
+      const texts = new Map();
+      try {
+        const r = await fetch('/api/search', { cache: 'no-store' });
+        if (r.ok) {
+          const data = await r.json();
+          for (const [p, b] of Object.entries(data.texts || {})) texts.set(p, b);
+        }
+      } catch { /* fall back to preview bodies below */ }
+      const ms = new MiniSearch(SEARCH_CONFIG);
+      ms.addAll(state.docs.map(d => ({
+        path: d.path,
+        title: d.title || '',
+        name: d.name || '',
+        body: texts.get(d.path) || d.body || '',
+      })));
+      state.searchTexts = texts;
+      state.search = ms;
+      return ms;
+    })();
+    return state.searchLoading;
+  }
+
   const runSearch = debounce((q) => {
     const results = $('#search-results');
     q = q.trim();
     if (!q) { results.classList.add('hidden'); results.innerHTML = ''; return; }
+    // Kick off the full-text build; re-run this query once it's ready so the
+    // first keystrokes use the preview-body fallback and then upgrade silently.
+    if (!state.search) {
+      ensureSearchIndex().then(() => {
+        if ($('#search').value.trim() === q) runSearch($('#search').value);
+      }).catch(() => {});
+    }
     const hits = searchDocs(q, 30);
     results.innerHTML = '';
     if (!hits.length) {
@@ -1888,6 +1953,28 @@
   function searchDocs(query, limit) {
     const terms = query.toLowerCase().split(/\s+/).filter(Boolean);
     if (!terms.length) return [];
+    // Full-text path: MiniSearch gives stemming, fuzzy/typo tolerance, prefix
+    // and BM25 ranking with our field weights. Results carry only the id (path)
+    // and score, so resolve the full doc record back via docsByPath.
+    if (state.search) {
+      const raw = state.search.search(query, {
+        boost: SEARCH_BOOST,
+        prefix: true,
+        fuzzy: 0.2,
+        combineWith: 'AND',
+      });
+      const hits = [];
+      for (const r of raw) {
+        const doc = state.docsByPath.get(r.id);
+        if (!doc) continue;
+        const full = (state.searchTexts && state.searchTexts.get(doc.path)) || doc.body || '';
+        hits.push({ doc, score: r.score, terms, snippet: makeSnippet(full, terms) });
+        if (hits.length >= limit) break;
+      }
+      return hits;
+    }
+    // Fallback (index still building): the original substring scan over preview
+    // bodies, so search is responsive on the first keystrokes.
     const hits = [];
     for (const d of state.docs) {
       const title = (d.title || '').toLowerCase();
