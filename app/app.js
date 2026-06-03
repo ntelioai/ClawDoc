@@ -1344,9 +1344,12 @@
     // the grid. .csv round-trips as text, .xlsx as a binary workbook.
     const isCsv = doc.ext === 'csv';
     const bar = el('div', { class: 'sheet-bar' });
+    // Save-surface note (#42): be explicit about what survives a save so the
+    // Formula/Numfmt UI Univer shows doesn't become a silent data-loss trap.
+    // The save path serializes evaluated cell values + sheet structure only.
     bar.appendChild(el('span', { class: 'sheet-note' },
-      isCsv ? 'Editable spreadsheet — saves back as CSV (single sheet).'
-            : 'Editable spreadsheet — saves back as XLSX. Cell values + sheets are preserved; formulas/styles/merges are not.'));
+      isCsv ? 'Editable spreadsheet — saves back as CSV: one sheet, cell values only. Extra tabs, formulas, number formats and styles are not saved.'
+            : 'Editable spreadsheet — saves back as XLSX. Cell values + sheet structure are preserved; formulas, number formats, styles and merges save as their evaluated values.'));
     const status = el('span', { class: 'sheet-status' });
     const saveBtn = el('button', { class: 'sheet-save', disabled: 'true' }, 'Save  ⌘S');
     bar.appendChild(status);
@@ -1367,11 +1370,22 @@
     const doSave = async () => {
       if (!_activeUniver || !_sheetDirty) return;
       const XLSX = window.XLSX;
+      const sheets = readUniverSheets();
+      // CSV is single-sheet by nature; extra tabs the user added via Univer's
+      // built-in sheet bar would be silently dropped on save. Make it explicit
+      // rather than silent (#42).
+      if (isCsv && sheets.length > 1) {
+        const keep = sheets[0].name || 'Sheet1';
+        const ok = await uiConfirm(
+          'CSV files hold a single sheet. Only “' + keep + '” will be saved — the other ' +
+          (sheets.length - 1) + ' sheet(s) will be dropped. Save anyway?',
+          { title: 'Save as CSV', kind: 'danger' });
+        if (!ok) return;
+      }
       status.textContent = 'Saving…';
       status.className = 'sheet-status';
       saveBtn.disabled = true;
       try {
-        const sheets = readUniverSheets();
         const outWb = XLSX.utils.book_new();
         sheets.forEach((s, i) => {
           const ws = XLSX.utils.aoa_to_sheet(s.rows.length ? s.rows : [[]]);
@@ -1461,9 +1475,15 @@
         if (command && command.type === 2) markDirty();
       });
       _sheetSaveFn = doSave;
-      // Defer the ready flag past this tick so createWorkbook's own mutations
-      // (which dispatch synchronously / microtask) are ignored.
-      setTimeout(() => { _sheetReady = true; }, 0);
+      // Arm the dirty-gate on the first real user interaction rather than a
+      // setTimeout tick. Univer flushes some load-time mutations on a later
+      // macrotask, so a setTimeout(0) gate races and flips a pristine sheet
+      // dirty before the user has touched anything (#40). A pointer/keyboard
+      // interaction inside the grid is an unambiguous signal that subsequent
+      // mutations are genuine edits; load-time mutations never follow one.
+      const armReady = () => { _sheetReady = true; };
+      host.addEventListener('pointerdown', armReady, { once: true });
+      host.addEventListener('keydown', armReady, { capture: true, once: true });
     } catch (err) {
       host.innerHTML = '';
       wrap.appendChild(el('div', { class: 'empty' }, 'Could not render spreadsheet: ' + escapeHtml(err.message)));
@@ -1516,8 +1536,17 @@
     const bar = el('div', { class: 'docx-bar' });
     bar.appendChild(el('span', { class: 'docx-note' },
       'Editable Word document — saves back as DOCX. Text, styles, tables, images and headers/footers are preserved; exotic constructs may normalize.'));
+    // View controls surfaced from SuperDoc's API (#41): a read/edit mode
+    // toggle (setDocumentMode) and a rulers toggle (toggleRuler). Pagination
+    // (page view) and rulers are enabled in the constructor below.
+    const viewCtl = el('div', { class: 'docx-viewctl' });
+    const modeBtn = el('button', { class: 'docx-ctl-btn', title: 'Toggle read-only / editing mode' }, 'Editing');
+    const rulerBtn = el('button', { class: 'docx-ctl-btn', title: 'Show/hide rulers' }, 'Rulers');
+    viewCtl.appendChild(modeBtn);
+    viewCtl.appendChild(rulerBtn);
     const status = el('span', { class: 'docx-status' });
     const saveBtn = el('button', { class: 'docx-save', disabled: 'true' }, 'Save  ⌘S');
+    bar.appendChild(viewCtl);
     bar.appendChild(status);
     bar.appendChild(saveBtn);
     const toolbar = el('div', { class: 'docx-toolbar', id: 'docx-toolbar' });
@@ -1582,17 +1611,45 @@
         selector: host,
         toolbar: '#docx-toolbar',
         documentMode: 'editing',
+        // Paginated page view + rulers, matching Word/Google-Docs defaults.
+        // The page itself is centered in .docx-host via CSS (#41).
+        pagination: true,
+        rulers: true,
         documents: [{ id: 'doc-' + doc.path, type: 'docx', data: file }],
         onReady: () => {
           _docxSaveFn = doSave;
-          // Defer ready past this tick so load-time editor-update events
-          // (fired while the document hydrates) don't mark it dirty.
-          setTimeout(() => { _docxReady = true; }, 0);
+          // Arm the dirty-gate on the first real user interaction. SuperDoc
+          // emits load-time editor-update events while the document hydrates,
+          // some on a later macrotask than a setTimeout(0) tick, which would
+          // flip a pristine doc dirty (#40, same race as the sheet viewer).
+          // A pointer/keyboard interaction in the editor body or toolbar is an
+          // unambiguous signal that later updates are genuine edits.
+          const armReady = () => { _docxReady = true; };
+          host.addEventListener('pointerdown', armReady, { once: true });
+          host.addEventListener('keydown', armReady, { capture: true, once: true });
+          toolbar.addEventListener('pointerdown', armReady, { once: true });
         },
       });
       _activeSuperdoc = sd;
       _docxDoc = doc;
       sd.on('editor-update', markDirty);
+
+      // Wire the surfaced view controls. setDocumentMode / toggleRuler are the
+      // SuperDoc instance methods confirmed present in the vendored bundle.
+      let docxMode = 'editing';
+      modeBtn.addEventListener('click', () => {
+        docxMode = docxMode === 'editing' ? 'viewing' : 'editing';
+        try { sd.setDocumentMode(docxMode); } catch {}
+        modeBtn.textContent = docxMode === 'editing' ? 'Editing' : 'Viewing';
+        modeBtn.classList.toggle('active', docxMode === 'viewing');
+      });
+      let rulersOn = true;
+      rulerBtn.classList.add('active');
+      rulerBtn.addEventListener('click', () => {
+        try { sd.toggleRuler(); } catch {}
+        rulersOn = !rulersOn;
+        rulerBtn.classList.toggle('active', rulersOn);
+      });
     } catch (err) {
       host.innerHTML = '';
       wrap.appendChild(el('div', { class: 'empty' }, 'Could not render document: ' + escapeHtml(err.message)));
@@ -2273,6 +2330,119 @@
   }
 
   // ---------- settings modal ----------
+  // Model-provider presets (#43). baseUrl is a best-effort hint the user can
+  // edit; compatibility varies and some providers need an Anthropic-compatible
+  // proxy in front. Empty baseUrl on 'anthropic' = use the built-in default.
+  const PROVIDER_PRESETS = {
+    anthropic: { label: 'Anthropic (default)', baseUrl: '', model: '' },
+    google:    { label: 'Google AI Studio', baseUrl: 'https://generativelanguage.googleapis.com/v1beta', model: '' },
+    ollama:    { label: 'Ollama (local)', baseUrl: 'http://localhost:11434', model: '' },
+    openrouter:{ label: 'OpenRouter', baseUrl: 'https://openrouter.ai/api/v1', model: '' },
+    custom:    { label: 'Custom', baseUrl: '', model: '' },
+  };
+
+  async function loadProviderSettings() {
+    try {
+      const r = await fetch('/api/provider');
+      if (r.ok) state.providerSettings = await r.json();
+    } catch {}
+  }
+
+  function renderProviderSection() {
+    const section = el('div', { class: 'settings-section' });
+    section.appendChild(el('h3', null, 'Model provider'));
+    const cur = state.providerSettings;
+    if (!cur) {
+      section.appendChild(el('div', { class: 'settings-help' }, 'Loading…'));
+      return section;
+    }
+
+    section.appendChild(el('div', { class: 'settings-help' },
+      'Point the embedded Claude Code at an alternative provider by overriding ' +
+      'ANTHROPIC_BASE_URL / ANTHROPIC_API_KEY. Applies to newly opened terminals ' +
+      'and agent sessions. Leave on Anthropic to use your existing claude login. ' +
+      'The API key is stored in settings.json (mode 0600).'));
+
+    const list = el('div', { class: 'settings-list' });
+    const mkRow = (label, control) => {
+      const row = el('div', { class: 'settings-row' });
+      row.appendChild(el('span', { class: 'sr-key' }, label));
+      row.appendChild(control);
+      return row;
+    };
+
+    // Provider preset
+    const sel = el('select', { class: 'settings-input' });
+    Object.keys(PROVIDER_PRESETS).forEach(key => {
+      sel.appendChild(el('option', { value: key }, PROVIDER_PRESETS[key].label));
+    });
+    sel.value = PROVIDER_PRESETS[cur.preset] ? cur.preset : 'custom';
+
+    const baseInput = el('input', {
+      type: 'text', class: 'settings-input', placeholder: 'https://… (blank = Anthropic default)',
+      spellcheck: 'false', autocomplete: 'off', value: cur.baseUrl || '',
+    });
+    const keyInput = el('input', {
+      type: 'password', class: 'settings-input',
+      placeholder: cur.hasKey ? '•••••••• (saved — leave blank to keep)' : 'API key',
+      spellcheck: 'false', autocomplete: 'off',
+    });
+    const modelInput = el('input', {
+      type: 'text', class: 'settings-input', placeholder: 'model name (optional)',
+      spellcheck: 'false', autocomplete: 'off', value: cur.model || '',
+    });
+
+    sel.addEventListener('change', () => {
+      const preset = PROVIDER_PRESETS[sel.value];
+      if (preset) { baseInput.value = preset.baseUrl; modelInput.value = preset.model; }
+    });
+
+    list.appendChild(mkRow('Provider', sel));
+    list.appendChild(mkRow('Base URL', baseInput));
+    list.appendChild(mkRow('API key', keyInput));
+    list.appendChild(mkRow('Model', modelInput));
+    section.appendChild(list);
+
+    const saveRow = el('div', { class: 'settings-row settings-save-row' });
+    const status = el('span', { class: 'settings-status' });
+    saveRow.appendChild(el('span', { class: 'sr-val' },
+      cur.preset === 'anthropic' ? 'Using Anthropic (default).' : 'Active: ' + (PROVIDER_PRESETS[cur.preset] ? PROVIDER_PRESETS[cur.preset].label : cur.preset)));
+    saveRow.appendChild(status);
+    const saveBtn = el('button', { class: 'btn-primary' }, 'Save provider');
+    saveBtn.addEventListener('click', async () => {
+      saveBtn.disabled = true;
+      status.textContent = 'Saving…';
+      status.className = 'settings-status';
+      const keyVal = keyInput.value;
+      try {
+        const r = await fetch('/api/provider', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            preset: sel.value,
+            baseUrl: baseInput.value,
+            model: modelInput.value,
+            apiKey: keyVal,
+            apiKeyProvided: keyVal !== '',
+          }),
+        });
+        const data = await r.json();
+        if (!r.ok || !data.ok) throw new Error(data.error || ('HTTP ' + r.status));
+        state.providerSettings = data;
+        status.textContent = 'Saved ✓ — opens in new terminals/agents';
+        status.className = 'settings-status ok';
+        setTimeout(() => { if (!$('#settings-modal').classList.contains('hidden')) renderSettings(); }, 900);
+      } catch (err) {
+        status.textContent = 'Error: ' + err.message;
+        status.className = 'settings-status error';
+        saveBtn.disabled = false;
+      }
+    });
+    saveRow.appendChild(saveBtn);
+    section.appendChild(saveRow);
+    return section;
+  }
+
   function openSettings() {
     // Snapshot the current workspace list into an editable working copy.
     const cur = (state.index && state.index.roots) || [];
@@ -2281,6 +2451,11 @@
     renderSettings();
     $('#settings-modal').classList.remove('hidden');
     $('#settings-toggle').classList.add('active');
+    // Provider config lives server-side; fetch then re-render so the section
+    // populates without blocking the rest of the dialog.
+    loadProviderSettings().then(() => {
+      if (!$('#settings-modal').classList.contains('hidden')) renderSettings();
+    });
   }
   function closeSettings() {
     delete state.editingWorkspaces;
@@ -2432,6 +2607,9 @@
 
     // GitHub section
     body.appendChild(gh.renderSettingsSection());
+
+    // Model provider section (#43)
+    body.appendChild(renderProviderSection());
 
     // Stats
     if (state.index && state.index.stats) {
@@ -2611,8 +2789,19 @@
   function confirmDiscardEdits() {
     // A dirty spreadsheet / docx uses the same nav guard as the markdown
     // editor so every navigation chokepoint protects unsaved edits too.
-    if (isSheetDirty() && !confirm('You have unsaved spreadsheet changes. Discard them?')) return false;
-    if (isDocxDirty() && !confirm('You have unsaved document changes. Discard them?')) return false;
+    // On discard, tear the editor down so the dirty flag is actually cleared —
+    // mirroring the markdown branch's destroyEditor(). Folder navigation goes
+    // selectFolder → renderFolder, which never calls renderDoc's dispose, so
+    // without this the dirty flag would persist and re-prompt on every click
+    // (#40).
+    if (isSheetDirty()) {
+      if (!confirm('You have unsaved spreadsheet changes. Discard them?')) return false;
+      disposeSpreadsheet();
+    }
+    if (isDocxDirty()) {
+      if (!confirm('You have unsaved document changes. Discard them?')) return false;
+      disposeSuperdoc();
+    }
     if (!state.editor) return true;
     if (!isEditorDirty()) { destroyEditor(); return true; }
     if (confirm('You have unsaved changes. Discard them?')) { destroyEditor(); return true; }
@@ -4239,13 +4428,23 @@
   // markdown via marked, HTML in a sandboxed iframe, PDF via <embed>, and
   // images directly. Closes on Esc, click backdrop, or spacebar (toggle).
   const preview = { open: false, currentPath: '' };
+  // A docx preview mounts its own read-only SuperDoc instance (separate from
+  // the main editor's _activeSuperdoc) so it must be torn down on close (#39).
+  let _previewSuperdoc = null;
 
   function previewIsOpen() { return preview.open; }
+
+  function disposePreviewSuperdoc() {
+    if (!_previewSuperdoc) return;
+    try { _previewSuperdoc.destroy(); } catch {}
+    _previewSuperdoc = null;
+  }
 
   function closePreview() {
     if (!preview.open) return;
     preview.open = false;
     preview.currentPath = '';
+    disposePreviewSuperdoc();
     const modal = $('#preview-modal');
     if (modal) modal.classList.add('hidden');
     const body = $('#preview-body');
@@ -4269,6 +4468,7 @@
     subBits.push(formatSize(doc.size));
     sub.textContent = subBits.join('  ·  ');
 
+    disposePreviewSuperdoc(); // tear down a prior docx preview before reusing the modal
     body.innerHTML = '<div class="preview-loading">Loading…</div>';
     modal.classList.remove('hidden');
 
@@ -4298,6 +4498,90 @@
       const img = el('img', { class: 'preview-img', src, alt: doc.name });
       body.innerHTML = '';
       body.appendChild(img);
+      return;
+    }
+
+    // Spreadsheet (.csv/.xlsx) — render every sheet as a read-only HTML table
+    // via SheetJS (already vendored). Lightweight and, crucially, independent
+    // of the editable Univer viewer's single global instance (#39).
+    if (isSheetExt(ext)) {
+      try {
+        await loadSheetJs();
+        const XLSX = window.XLSX;
+        const r = await fetch('/file?path=' + encodeURIComponent(doc.path) + '&' + bust, { cache: 'no-store' });
+        if (!r.ok) throw new Error('HTTP ' + r.status);
+        const wb = ext === 'csv'
+          ? XLSX.read(await r.text(), { type: 'string' })
+          : XLSX.read(new Uint8Array(await r.arrayBuffer()), { type: 'array' });
+        const wrap = el('div', { class: 'preview-sheet' });
+        wb.SheetNames.forEach((nm, i) => {
+          if (wb.SheetNames.length > 1) wrap.appendChild(el('div', { class: 'preview-sheet-name' }, nm || ('Sheet' + (i + 1))));
+          const holder = el('div', { class: 'preview-sheet-table' });
+          holder.innerHTML = XLSX.utils.sheet_to_html(wb.Sheets[nm], { editable: false });
+          wrap.appendChild(holder);
+        });
+        body.innerHTML = '';
+        body.appendChild(wrap);
+      } catch (err) {
+        body.innerHTML = '';
+        body.appendChild(el('div', { class: 'preview-error' }, 'Failed to load spreadsheet: ' + err.message));
+      }
+      return;
+    }
+
+    // Word document (.docx) — mount a read-only SuperDoc instance (viewing
+    // mode) in its own host so the main editor's instance is untouched (#39).
+    if (isDocxExt(ext)) {
+      try {
+        await loadSuperdocAssets();
+        const SD = window.SuperDoc;
+        if (typeof SD !== 'function') throw new Error('SuperDoc failed to load');
+        const r = await fetch('/file?path=' + encodeURIComponent(doc.path) + '&' + bust, { cache: 'no-store' });
+        if (!r.ok) throw new Error('HTTP ' + r.status);
+        const buf = await r.arrayBuffer();
+        const file = new File([buf], doc.name, { type: SD.DOCX || 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' });
+        const host = el('div', { class: 'preview-docx-host' });
+        body.innerHTML = '';
+        body.appendChild(host);
+        // The user may close the preview before SuperDoc finishes loading;
+        // bail out (and dispose) if so.
+        const sd = new SD({
+          selector: host,
+          documentMode: 'viewing',
+          pagination: true,
+          documents: [{ id: 'preview-' + doc.path, type: 'docx', data: file }],
+        });
+        if (preview.open && preview.currentPath === doc.path) _previewSuperdoc = sd;
+        else { try { sd.destroy(); } catch {} }
+      } catch (err) {
+        body.innerHTML = '';
+        body.appendChild(el('div', { class: 'preview-error' }, 'Failed to load document: ' + err.message));
+      }
+      return;
+    }
+
+    // Unsupported binary (no inline renderer) — a clean download/open card
+    // rather than dumping raw bytes into a <pre> (#39).
+    if (docKind(doc) === 'binary') {
+      const card = el('div', { class: 'preview-nopreview' });
+      card.appendChild(el('div', { class: 'preview-nopreview-title' }, 'No inline preview'));
+      const e = ext ? '.' + ext : 'this';
+      card.appendChild(el('div', { class: 'preview-nopreview-sub' },
+        'ClawDoc can’t preview ' + e + ' files. Open or download it instead.'));
+      const actions = el('div', { class: 'preview-nopreview-actions' });
+      actions.appendChild(el('a', {
+        class: 'nopreview-btn primary',
+        href: '/file?path=' + encodeURIComponent(doc.path) + '&download=1',
+        download: doc.name,
+      }, 'Download'));
+      const openBtn = el('button', { class: 'nopreview-btn' }, 'Open in default app');
+      openBtn.addEventListener('click', () => {
+        fetch('/api/open?path=' + encodeURIComponent(doc.path) + '&reveal=0').catch(() => {});
+      });
+      actions.appendChild(openBtn);
+      card.appendChild(actions);
+      body.innerHTML = '';
+      body.appendChild(card);
       return;
     }
 

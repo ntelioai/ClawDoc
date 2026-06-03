@@ -32,8 +32,29 @@ function terminalEnv(extra) {
     ...process.env,
     PATH: PANDOC_BIN_DIR + sep + (process.env.PATH || ''),
     CLAWDOC_NODE: process.execPath,
+    // Model-provider overrides (#43) layered on top of process.env so every
+    // spawned `claude` (terminal + agent) talks to the configured endpoint.
+    // Unset/Anthropic preset → empty object → no behavior change.
+    ...providerEnv(),
     ...extra,
   };
+}
+
+// Build the ANTHROPIC_* env overrides from saved provider settings. Returns
+// {} for the default (Anthropic) provider so existing users see no change.
+function providerEnv() {
+  let p;
+  try { p = getProviderSettings(); } catch { return {}; }
+  if (!p || !p.preset || p.preset === 'anthropic') return {};
+  const env = {};
+  if (p.baseUrl) env.ANTHROPIC_BASE_URL = p.baseUrl;
+  if (p.apiKey) {
+    env.ANTHROPIC_API_KEY = p.apiKey;
+    // Some Anthropic-compatible proxies read the token from AUTH_TOKEN instead.
+    env.ANTHROPIC_AUTH_TOKEN = p.apiKey;
+  }
+  if (p.model) env.ANTHROPIC_MODEL = p.model;
+  return env;
 }
 // Writable data directory — overridable so packaged apps can redirect to userData.
 const DATA_DIR = process.env.CLAWDOC_DATA_DIR || SCRIPT_DIR;
@@ -106,6 +127,37 @@ function setGitSettingsFor(absPath, cfg) {
   if (cfg === null) delete s.git.perWorkspace[absPath];
   else s.git.perWorkspace[absPath] = { ...(s.git.perWorkspace[absPath] || {}), ...cfg };
   writeSettings(s);
+}
+
+// Model-provider config (#43): { preset, baseUrl, apiKey, model }. Stored in
+// settings.json (mode 0600). The apiKey is the one sensitive field; it's never
+// sent back to the client — only a `hasKey` flag is.
+function getProviderSettings() {
+  const s = readSettings();
+  const p = s.provider && typeof s.provider === 'object' ? s.provider : {};
+  return {
+    preset: typeof p.preset === 'string' ? p.preset : 'anthropic',
+    baseUrl: typeof p.baseUrl === 'string' ? p.baseUrl : '',
+    apiKey: typeof p.apiKey === 'string' ? p.apiKey : '',
+    model: typeof p.model === 'string' ? p.model : '',
+  };
+}
+
+function setProviderSettings(cfg) {
+  const s = readSettings();
+  const cur = getProviderSettings();
+  const next = {
+    preset: typeof cfg.preset === 'string' ? cfg.preset : cur.preset,
+    baseUrl: typeof cfg.baseUrl === 'string' ? cfg.baseUrl.trim() : cur.baseUrl,
+    model: typeof cfg.model === 'string' ? cfg.model.trim() : cur.model,
+    // Only touch the key when the client explicitly supplies a new one
+    // (apiKeyProvided); otherwise retain the stored value so re-saving other
+    // fields doesn't wipe it.
+    apiKey: cfg.apiKeyProvided ? String(cfg.apiKey || '').trim() : cur.apiKey,
+  };
+  s.provider = next;
+  writeSettings(s);
+  return next;
 }
 
 function getGithubToken() {
@@ -366,6 +418,26 @@ const server = http.createServer((req, res) => {
 
   if (req.method === 'POST' && pathname === '/api/settings') {
     return handleSaveSettings(req, res);
+  }
+
+  // ---- model provider (#43) ----
+  if (req.method === 'GET' && pathname === '/api/provider') {
+    const p = getProviderSettings();
+    return sendJson(res, 200, {
+      preset: p.preset, baseUrl: p.baseUrl, model: p.model, hasKey: !!p.apiKey,
+    });
+  }
+  if (req.method === 'POST' && pathname === '/api/provider') {
+    return readJsonBody(req, res, (b) => {
+      try {
+        const next = setProviderSettings(b || {});
+        sendJson(res, 200, {
+          ok: true, preset: next.preset, baseUrl: next.baseUrl, model: next.model, hasKey: !!next.apiKey,
+        });
+      } catch (err) {
+        sendJson(res, 500, { error: 'Failed to save provider settings: ' + err.message });
+      }
+    });
   }
 
   // ---- git / github routes ----
