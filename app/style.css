@@ -798,6 +798,71 @@ code {
 .doc-meta a { color: var(--text-muted); text-decoration: none; }
 .doc-meta a:hover { color: var(--accent-strong); }
 
+/* Image preview */
+.image-view {
+  display: flex;
+  justify-content: center;
+  padding: 8px 0;
+}
+.image-preview {
+  max-width: 100%;
+  height: auto;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background:
+    linear-gradient(45deg, #00000008 25%, transparent 25%, transparent 75%, #00000008 75%) 0 0 / 20px 20px,
+    linear-gradient(45deg, #00000008 25%, transparent 25%, transparent 75%, #00000008 75%) 10px 10px / 20px 20px,
+    var(--bg-elev);
+}
+
+/* Plain-text / source preview */
+.text-view {
+  font-family: var(--font-mono);
+  font-size: 12.5px;
+  line-height: 1.6;
+  color: var(--text);
+  background: var(--bg-elev);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 16px 18px;
+  margin: 0;
+  white-space: pre-wrap;
+  word-break: break-word;
+  overflow-x: auto;
+}
+
+/* "No preview" fallback card */
+.nopreview {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  gap: 10px;
+  padding: 48px 24px;
+  border: 1px dashed var(--border-strong);
+  border-radius: 10px;
+  background: var(--bg-elev);
+}
+.nopreview-icon { color: var(--text-dim); transform: scale(2.2); margin-bottom: 8px; }
+.nopreview-title { font-size: 16px; font-weight: 600; color: var(--text); }
+.nopreview-sub { font-size: 13px; color: var(--text-muted); max-width: 420px; }
+.nopreview-actions { display: flex; gap: 10px; margin-top: 14px; flex-wrap: wrap; justify-content: center; }
+.nopreview-btn {
+  font: inherit;
+  font-size: 13px;
+  padding: 8px 16px;
+  border: 1px solid var(--border-strong);
+  border-radius: 7px;
+  background: var(--bg);
+  color: var(--text);
+  cursor: pointer;
+  text-decoration: none;
+  transition: background 0.12s, border-color 0.12s;
+}
+.nopreview-btn:hover { background: var(--bg-hover); border-color: var(--accent); }
+.nopreview-btn.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+.nopreview-btn.primary:hover { background: var(--accent-strong); border-color: var(--accent-strong); }
+
 .markdown {
   font-family: var(--font-prose);
   font-size: 16px;

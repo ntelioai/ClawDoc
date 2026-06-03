@@ -305,6 +305,9 @@
   const ICON_MD = '<svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor" xmlns="http://www.w3.org/2000/svg"><path d="M14 3a1 1 0 0 1 1 1v8a1 1 0 0 1-1 1H2a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1h12zM2 2a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V4a2 2 0 0 0-2-2H2z"/><path fill-rule="evenodd" d="M9.146 8.146a.5.5 0 0 1 .708 0L11.5 9.793l1.646-1.647a.5.5 0 0 1 .708.708l-2 2a.5.5 0 0 1-.708 0l-2-2a.5.5 0 0 1 0-.708z"/><path fill-rule="evenodd" d="M11.5 5a.5.5 0 0 1 .5.5v4a.5.5 0 0 1-1 0v-4a.5.5 0 0 1 .5-.5z"/><path d="M3.56 11V7.01h.056l1.428 3.239h.774l1.42-3.24h.056V11h1.073V5.001h-1.2l-1.71 3.894h-.039l-1.71-3.894H2.5V11h1.06z"/></svg>';
   const ICON_HTML = '<svg width="16" height="16" viewBox="0 0 400 400" fill="currentColor" xmlns="http://www.w3.org/2000/svg"><path d="M325,105H250a5,5,0,0,1-5-5V25a5,5,0,1,1,10,0V95h70a5,5,0,0,1,0,10Z"/><path d="M325,154.83a5,5,0,0,1-5-5V102.07L247.93,30H100A20,20,0,0,0,80,50v98.17a5,5,0,0,1-10,0V50a30,30,0,0,1,30-30H250a5,5,0,0,1,3.54,1.46l75,75A5,5,0,0,1,330,100v49.83A5,5,0,0,1,325,154.83Z"/><path d="M300,380H100a30,30,0,0,1-30-30V275a5,5,0,0,1,10,0v75a20,20,0,0,0,20,20H300a20,20,0,0,0,20-20V275a5,5,0,0,1,10,0v75A30,30,0,0,1,300,380Z"/><path d="M275,280H125a5,5,0,1,1,0-10H275a5,5,0,0,1,0,10Z"/><path d="M200,330H125a5,5,0,1,1,0-10h75a5,5,0,0,1,0,10Z"/><path d="M325,280H75a30,30,0,0,1-30-30V173.17a30,30,0,0,1,30-30h.2l250,1.66a30.09,30.09,0,0,1,29.81,30V250A30,30,0,0,1,325,280ZM75,153.17a20,20,0,0,0-20,20V250a20,20,0,0,0,20,20H325a20,20,0,0,0,20-20V174.83a20.06,20.06,0,0,0-19.88-20l-250-1.66Z"/><path d="M148.48,236h-9.61V212.84H118.52V236h-9.61V182.68h9.61v21.91h20.35V182.68h9.61Z"/><path d="M178.83,236H168.52V190.92H154.34v-8.24H193v8.24H178.83Z"/><path d="M251.17,236h-9.8V189.32L226.6,236h-5l-14.84-46.68V236h-7.85V182.68h15L225.08,217l11-34.34h15.12Z"/><path d="M295.74,236H262.93V182.68H273v44.61h22.7Z"/></svg>';
   const ICON_PDF = '<svg width="16" height="16" viewBox="-4 0 40 40" fill="currentColor" xmlns="http://www.w3.org/2000/svg"><path d="M25.6686 26.0962C25.1812 26.2401 24.4656 26.2563 23.6984 26.145C22.875 26.0256 22.0351 25.7739 21.2096 25.403C22.6817 25.1888 23.8237 25.2548 24.8005 25.6009C25.0319 25.6829 25.412 25.9021 25.6686 26.0962ZM17.4552 24.7459C17.3953 24.7622 17.3363 24.7776 17.2776 24.7939C16.8815 24.9017 16.4961 25.0069 16.1247 25.1005L15.6239 25.2275C14.6165 25.4824 13.5865 25.7428 12.5692 26.0529C12.9558 25.1206 13.315 24.178 13.6667 23.2564C13.9271 22.5742 14.193 21.8773 14.468 21.1894C14.6075 21.4198 14.7531 21.6503 14.9046 21.8814C15.5948 22.9326 16.4624 23.9045 17.4552 24.7459ZM14.8927 14.2326C14.958 15.383 14.7098 16.4897 14.3457 17.5514C13.8972 16.2386 13.6882 14.7889 14.2489 13.6185C14.3927 13.3185 14.5105 13.1581 14.5869 13.0744C14.7049 13.2566 14.8601 13.6642 14.8927 14.2326ZM9.63347 28.8054C9.38148 29.2562 9.12426 29.6782 8.86063 30.0767C8.22442 31.0355 7.18393 32.0621 6.64941 32.0621C6.59681 32.0621 6.53316 32.0536 6.44015 31.9554C6.38028 31.8926 6.37069 31.8476 6.37359 31.7862C6.39161 31.4337 6.85867 30.8059 7.53527 30.2238C8.14939 29.6957 8.84352 29.2262 9.63347 28.8054ZM27.3706 26.1461C27.2889 24.9719 25.3123 24.2186 25.2928 24.2116C24.5287 23.9407 23.6986 23.8091 22.7552 23.8091C21.7453 23.8091 20.6565 23.9552 19.2582 24.2819C18.014 23.3999 16.9392 22.2957 16.1362 21.0733C15.7816 20.5332 15.4628 19.9941 15.1849 19.4675C15.8633 17.8454 16.4742 16.1013 16.3632 14.1479C16.2737 12.5816 15.5674 11.5295 14.6069 11.5295C13.948 11.5295 13.3807 12.0175 12.9194 12.9813C12.0965 14.6987 12.3128 16.8962 13.562 19.5184C13.1121 20.5751 12.6941 21.6706 12.2895 22.7311C11.7861 24.0498 11.2674 25.4103 10.6828 26.7045C9.04334 27.3532 7.69648 28.1399 6.57402 29.1057C5.8387 29.7373 4.95223 30.7028 4.90163 31.7107C4.87693 32.1854 5.03969 32.6207 5.37044 32.9695C5.72183 33.3398 6.16329 33.5348 6.6487 33.5354C8.25189 33.5354 9.79489 31.3327 10.0876 30.8909C10.6767 30.0029 11.2281 29.0124 11.7684 27.8699C13.1292 27.3781 14.5794 27.011 15.985 26.6562L16.4884 26.5283C16.8668 26.4321 17.2601 26.3257 17.6635 26.2153C18.0904 26.0999 18.5296 25.9802 18.976 25.8665C20.4193 26.7844 21.9714 27.3831 23.4851 27.6028C24.7601 27.7883 25.8924 27.6807 26.6589 27.2811C27.3486 26.9219 27.3866 26.3676 27.3706 26.1461ZM30.4755 36.2428C30.4755 38.3932 28.5802 38.5258 28.1978 38.5301H3.74486C1.60224 38.5301 1.47322 36.6218 1.46913 36.2428L1.46884 3.75642C1.46884 1.6039 3.36763 1.4734 3.74457 1.46908H20.263L20.2718 1.4778V7.92396C20.2718 9.21763 21.0539 11.6669 24.0158 11.6669H30.4203L30.4753 11.7218L30.4755 36.2428ZM28.9572 10.1976H24.0169C21.8749 10.1976 21.7453 8.29969 21.7424 7.92417V2.95307L28.9572 10.1976ZM31.9447 36.2428V11.1157L21.7424 0.871022V0.823357H21.6936L20.8742 0H3.74491C2.44954 0 0 0.785336 0 3.75711V36.2435C0 37.5427 0.782956 40 3.74491 40H28.2001C29.4952 39.9997 31.9447 39.2143 31.9447 36.2428Z"/></svg>';
+  const ICON_IMAGE = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></svg>';
+  const ICON_TEXT = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/><line x1="10" y1="9" x2="8" y2="9"/></svg>';
+  const ICON_FILE = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M13 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9z"/><polyline points="13 2 13 9 20 9"/></svg>';
   const ICON_CHEVRON = '<svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><polyline points="6 9 12 15 18 9"/></svg>';
   const ICON_REFRESH = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></svg>';
   const ICON_CHECK = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>';
@@ -480,14 +483,40 @@
     return t.includes(filter) || n.includes(filter) || p.includes(filter);
   }
 
+  const IMAGE_EXTS = ['png','jpg','jpeg','gif','svg','webp','bmp','ico','avif'];
+  const TEXT_EXTS = ['txt','text','csv','tsv','json','jsonc','yaml','yml','xml',
+    'toml','ini','cfg','conf','log','js','mjs','cjs','ts','tsx','jsx','css',
+    'scss','less','py','rb','go','rs','java','c','h','cpp','hpp','cc','cs',
+    'php','sh','bash','zsh','sql','r','lua','pl','swift','kt','dart','vue','svelte'];
+
+  // Render kind for a doc. Prefer the indexer's `kind`; fall back to ext so
+  // older index.json files (pre-reindex) still render sensibly.
+  function docKind(doc) {
+    if (doc.kind) return doc.kind;
+    const e = doc.ext;
+    if (e === 'md' || e === 'markdown') return 'markdown';
+    if (e === 'html' || e === 'htm') return 'html';
+    if (e === 'pdf') return 'pdf';
+    if (IMAGE_EXTS.includes(e)) return 'image';
+    if (TEXT_EXTS.includes(e)) return 'text';
+    return 'binary';
+  }
   function docKindClass(doc) {
-    if (doc.ext === 'pdf') return 'doc-pdf';
-    if (doc.ext === 'html' || doc.ext === 'htm') return 'doc-html';
+    const k = docKind(doc);
+    if (k === 'pdf') return 'doc-pdf';
+    if (k === 'html') return 'doc-html';
+    if (k === 'image') return 'doc-image';
+    if (k === 'text') return 'doc-text';
+    if (k === 'binary') return 'doc-binary';
     return 'doc-md';
   }
   function docIcon(doc) {
-    if (doc.ext === 'pdf') return ICON_PDF;
-    if (doc.ext === 'html' || doc.ext === 'htm') return ICON_HTML;
+    const k = docKind(doc);
+    if (k === 'pdf') return ICON_PDF;
+    if (k === 'html') return ICON_HTML;
+    if (k === 'image') return ICON_IMAGE;
+    if (k === 'text') return ICON_TEXT;
+    if (k === 'binary') return ICON_FILE;
     return ICON_MD;
   }
 
@@ -984,10 +1013,8 @@
   }
 
   function renderDocRow(d) {
-    const isHtml = d.ext === 'html' || d.ext === 'htm';
-    const isPdf = d.ext === 'pdf';
-    const kindClass = isPdf ? 'pdf' : isHtml ? 'html' : 'md';
-    const icon = isPdf ? ICON_PDF : isHtml ? ICON_HTML : ICON_MD;
+    const kindClass = docKindClass(d).replace(/^doc-/, '');
+    const icon = docIcon(d);
     const row = el('a', {
       class: 'row ' + kindClass,
       href: '#doc=' + encodeURIComponent(d.path),
@@ -1013,18 +1040,63 @@
   }
 
   // ---------- document view ----------
+  // Shared title + metadata header used by every viewer kind.
+  function docHead(doc) {
+    const head = el('div', { class: 'doc-head' });
+    head.appendChild(el('h1', { class: 'doc-title' }, doc.title || doc.name));
+    const bits = [];
+    if (doc.date) bits.push(doc.date);
+    if (doc.project) bits.push(doc.project);
+    if (doc.docType) bits.push(doc.docType);
+    bits.push(formatSize(doc.size));
+    bits.push(doc.path);
+    head.appendChild(el('div', { class: 'doc-meta' }, bits.join('  ·  ')));
+    return head;
+  }
+
+  // Graceful card for files ClawDoc can't render inline: name/meta plus
+  // download and open-externally actions. No hex view by design.
+  function renderNoPreview(doc) {
+    const view = el('div', { class: 'doc-view' });
+    view.appendChild(docHead(doc));
+    const card = el('div', { class: 'nopreview' });
+    card.appendChild(el('div', { class: 'nopreview-icon', html: ICON_FILE }));
+    card.appendChild(el('div', { class: 'nopreview-title' }, 'No preview available'));
+    const ext = doc.ext ? '.' + doc.ext : 'this';
+    card.appendChild(el('div', { class: 'nopreview-sub' },
+      'ClawDoc can’t render ' + ext + ' files inline. You can open or download it instead.'));
+    const actions = el('div', { class: 'nopreview-actions' });
+    actions.appendChild(el('a', {
+      class: 'nopreview-btn primary',
+      href: '/file?path=' + encodeURIComponent(doc.path) + '&download=1',
+      download: doc.name,
+    }, 'Download'));
+    const openBtn = el('button', { class: 'nopreview-btn' }, 'Open in default app');
+    openBtn.addEventListener('click', () => {
+      fetch('/api/open?path=' + encodeURIComponent(doc.path) + '&reveal=0').catch(() => {});
+    });
+    actions.appendChild(openBtn);
+    const revealBtn = el('button', { class: 'nopreview-btn' }, 'Reveal in Finder');
+    revealBtn.addEventListener('click', () => {
+      fetch('/api/open?path=' + encodeURIComponent(doc.path)).catch(() => {});
+    });
+    actions.appendChild(revealBtn);
+    card.appendChild(actions);
+    view.appendChild(card);
+    return view;
+  }
+
   async function renderDoc(doc, anchor, opts) {
     renderBreadcrumb();
     const viewer = $('#viewer');
     viewer.innerHTML = '';
-    const isHtml = doc.ext === 'html' || doc.ext === 'htm';
-    const isPdf = doc.ext === 'pdf';
+    const kind = docKind(doc);
     const reload = !!(opts && opts.reload);
     // Cache-bust on explicit reload so iframes/<embed>/fetched content come
     // straight from disk rather than the browser's resource cache.
     const bust = reload ? ('_ts=' + Date.now()) : '';
 
-    if (isHtml) {
+    if (kind === 'html') {
       const wrap = el('div', { class: 'html-frame-wrap' });
       // Serve via /raw/<path> so the iframe's base URL matches the document's
       // folder — relative refs like `assets/foo.png` resolve correctly.
@@ -1041,7 +1113,7 @@
       return;
     }
 
-    if (isPdf) {
+    if (kind === 'pdf') {
       const wrap = el('div', { class: 'pdf-frame-wrap' });
       const src = '/file?path=' + encodeURIComponent(doc.path) + (bust ? '&' + bust : '') + (anchor ? '#' + anchor : '');
       // <embed> works better than <iframe> for PDFs on Safari/Chrome —
@@ -1062,6 +1134,48 @@
       return;
     }
 
+    if (kind === 'image') {
+      const view = el('div', { class: 'doc-view' });
+      view.appendChild(docHead(doc));
+      const wrap = el('div', { class: 'image-view' });
+      wrap.appendChild(el('img', {
+        class: 'image-preview',
+        src: '/file?path=' + encodeURIComponent(doc.path) + (bust ? '&' + bust : ''),
+        alt: doc.name,
+      }));
+      view.appendChild(wrap);
+      viewer.appendChild(view);
+      viewer.scrollTop = 0;
+      return;
+    }
+
+    if (kind === 'text') {
+      let raw;
+      try {
+        const url = '/file?path=' + encodeURIComponent(doc.path) + (bust ? '&' + bust : '');
+        const r = await fetch(url, { cache: 'no-store' });
+        if (!r.ok) throw new Error('HTTP ' + r.status);
+        raw = await r.text();
+      } catch (err) {
+        renderEmpty('Failed to load: ' + escapeHtml(err.message));
+        return;
+      }
+      const view = el('div', { class: 'doc-view' });
+      view.appendChild(docHead(doc));
+      const pre = el('pre', { class: 'text-view' });
+      pre.textContent = raw;
+      view.appendChild(pre);
+      viewer.appendChild(view);
+      viewer.scrollTop = 0;
+      return;
+    }
+
+    if (kind === 'binary') {
+      viewer.appendChild(renderNoPreview(doc));
+      viewer.scrollTop = 0;
+      return;
+    }
+
     // Markdown
     let text;
     try {
@@ -1074,18 +1188,7 @@
       return;
     }
     const view = el('div', { class: 'doc-view' });
-    const head = el('div', { class: 'doc-head' });
-    head.appendChild(el('h1', { class: 'doc-title' }, doc.title || doc.name));
-    const meta = el('div', { class: 'doc-meta' });
-    const bits = [];
-    if (doc.date) bits.push(doc.date);
-    if (doc.project) bits.push(doc.project);
-    if (doc.docType) bits.push(doc.docType);
-    bits.push(formatSize(doc.size));
-    bits.push(doc.path);
-    meta.textContent = bits.join('  ·  ');
-    head.appendChild(meta);
-    view.appendChild(head);
+    view.appendChild(docHead(doc));
 
     const md = el('div', { class: 'markdown' });
     // Strip front-matter for display

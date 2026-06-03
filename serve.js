@@ -167,6 +167,8 @@ const MIME = {
   '.gif': 'image/gif',
   '.svg': 'image/svg+xml',
   '.webp': 'image/webp',
+  '.bmp': 'image/bmp',
+  '.avif': 'image/avif',
   '.ico': 'image/x-icon',
   '.pdf': 'application/pdf',
   '.mp4': 'video/mp4',
@@ -185,17 +187,23 @@ function sendText(res, status, body, type) {
   res.end(body);
 }
 
-function sendFile(res, fp) {
+function sendFile(res, fp, downloadName) {
   let stat;
   try { stat = fs.statSync(fp); } catch { return sendText(res, 404, 'Not found'); }
   if (!stat.isFile()) return sendText(res, 404, 'Not found');
   const ext = path.extname(fp).toLowerCase();
   const type = MIME[ext] || 'application/octet-stream';
-  res.writeHead(200, {
+  const headers = {
     'Content-Type': type,
     'Content-Length': stat.size,
     'Cache-Control': 'no-cache',
-  });
+  };
+  if (downloadName) {
+    // Force a save dialog rather than inline display for the Download button.
+    const safe = String(downloadName).replace(/[\r\n"]/g, '');
+    headers['Content-Disposition'] = `attachment; filename="${safe}"`;
+  }
+  res.writeHead(200, headers);
   fs.createReadStream(fp).pipe(res);
 }
 
@@ -259,7 +267,8 @@ const server = http.createServer((req, res) => {
     if (!prefixed) return sendText(res, 400, 'missing path');
     const r = resolveWorkspacePath(prefixed);
     if (!r) return sendText(res, 403, 'Forbidden or unknown workspace');
-    return sendFile(res, r.fp);
+    const download = query && query.download === '1' ? path.basename(r.fp) : null;
+    return sendFile(res, r.fp, download);
   }
 
   // Path-shaped raw file endpoint. Used for HTML iframes so that relative
@@ -275,11 +284,13 @@ const server = http.createServer((req, res) => {
   }
 
   if (req.method === 'GET' && pathname === '/api/open') {
-    // Reveal a file in the OS Finder (macOS).
+    // reveal=0 opens the file in its default app; otherwise reveal it in Finder.
     const prefixed = (query && query.path) || '';
     const r = resolveWorkspacePath(prefixed);
     if (!r) return sendText(res, 403, 'Forbidden or unknown workspace');
-    spawn('open', ['-R', r.fp], { detached: true, stdio: 'ignore' }).unref();
+    const reveal = !query || query.reveal !== '0';
+    const args = reveal ? ['-R', r.fp] : [r.fp];
+    spawn('open', args, { detached: true, stdio: 'ignore' }).unref();
     return sendText(res, 200, '{"ok":true}', 'application/json; charset=utf-8');
   }
 
