@@ -457,11 +457,17 @@ function handleSave(req, res, query) {
   if (!r) return sendText(res, 403, '{"error":"forbidden or unknown workspace"}', 'application/json');
   const fp = r.fp;
   const ext = path.extname(fp).toLowerCase();
-  if (ext !== '.md' && ext !== '.markdown') {
-    return sendText(res, 400, '{"error":"only .md / .markdown files can be saved"}', 'application/json');
+  // Saveable kinds: markdown (text), plus the spreadsheet round-trips from
+  // issue #24 — .csv (text) and .xlsx (binary). Everything else stays
+  // read-only. xlsx is binary, so we never utf8-decode the body for any kind:
+  // the raw request bytes are written through verbatim, which is byte-exact
+  // for text too.
+  const SAVEABLE = new Set(['.md', '.markdown', '.csv', '.xlsx']);
+  if (!SAVEABLE.has(ext)) {
+    return sendText(res, 400, '{"error":"only .md / .markdown / .csv / .xlsx files can be saved"}', 'application/json');
   }
 
-  const MAX = 10 * 1024 * 1024; // 10 MB cap
+  const MAX = 10 * 1024 * 1024; // 10 MB cap (covers xlsx binaries too)
   const chunks = [];
   let size = 0;
   req.on('data', (chunk) => {
@@ -476,11 +482,13 @@ function handleSave(req, res, query) {
     if (size > MAX) {
       return sendText(res, 413, '{"error":"file too large"}', 'application/json');
     }
-    const body = Buffer.concat(chunks).toString('utf8');
+    const body = Buffer.concat(chunks);
     try {
-      // Write atomically: temp file in the same dir + rename.
+      // Write atomically: temp file in the same dir + rename. Write the raw
+      // Buffer (no encoding) so binary .xlsx bytes survive intact and text
+      // bodies stay byte-exact.
       const tmp = fp + '.clawdoc-tmp-' + process.pid + '-' + Date.now();
-      fs.writeFileSync(tmp, body, 'utf8');
+      fs.writeFileSync(tmp, body);
       fs.renameSync(tmp, fp);
       const stat = fs.statSync(fp);
       sendText(res, 200,

@@ -956,16 +956,23 @@
     return row;
   }
 
-  // ---------- spreadsheet view (Univer, view-only) ----------
+  // ---------- spreadsheet view (Univer, editable) ----------
   // Univer's UMD bundle is ~10 MB, so it loads lazily the first time a
   // spreadsheet is opened — not on every app start. SheetJS parses both .csv
   // and .xlsx into rows on the client (Univer's own xlsx import needs a
-  // conversion server), which we feed into a Univer workbook. Phase 1 is
-  // view-only: the grid is interactive but edits stay in memory and are not
-  // written back. See issue #24 for the CSV/XLSX round-trip follow-ups.
+  // conversion server), which we feed into a Univer workbook; on save we read
+  // the grid back out via the Facade API and re-serialize with SheetJS
+  // (sheet_to_csv for .csv, XLSX.write for .xlsx). Round-trip scope (#24):
+  // cell values and sheet structure are preserved; formulas, number formats,
+  // styles and merged cells are NOT (they're dropped to their evaluated
+  // values). xlsx diffs as a binary blob in git.
   let _univerCoreLoad = null;  // promise: react/rxjs/univer presets + locale + css
   let _sheetJsLoad = null;     // promise: SheetJS (xlsx) parser
   let _activeUniver = null;    // { univer, univerAPI } for the mounted sheet
+  let _sheetDoc = null;        // doc currently mounted in the grid
+  let _sheetDirty = false;     // has the user edited cells since load/save?
+  let _sheetReady = false;     // grid finished loading (ignore load-time mutations)
+  let _sheetSaveFn = null;     // bound save handler for ⌘S
 
   function loadScriptOnce(src) {
     return new Promise((resolve, reject) => {
@@ -1002,9 +1009,40 @@
   }
 
   function disposeSpreadsheet() {
+    _sheetDoc = null;
+    _sheetDirty = false;
+    _sheetReady = false;
+    _sheetSaveFn = null;
     if (!_activeUniver) return;
     try { _activeUniver.univer.dispose(); } catch {}
     _activeUniver = null;
+  }
+
+  function isSheetDirty() { return !!(_activeUniver && _sheetDirty); }
+
+  // Pull the live grid back out of Univer as { name, rows[][] } per sheet,
+  // trimming trailing all-empty rows/columns so serialization stays clean.
+  function readUniverSheets() {
+    const wb = _activeUniver.univerAPI.getActiveWorkbook();
+    const out = [];
+    for (const ws of wb.getSheets()) {
+      let rows = ws.getDataRange().getValues();
+      // Normalize null/undefined to '' and stringify nothing (SheetJS handles
+      // numbers/strings/booleans natively).
+      rows = rows.map(row => row.map(v => (v === null || v === undefined ? '' : v)));
+      // Drop trailing empty rows.
+      while (rows.length && rows[rows.length - 1].every(v => v === '')) rows.pop();
+      // Drop trailing empty columns.
+      let lastCol = 0;
+      for (const row of rows) {
+        for (let c = row.length - 1; c >= 0; c--) {
+          if (row[c] !== '') { if (c + 1 > lastCol) lastCol = c + 1; break; }
+        }
+      }
+      rows = rows.map(row => row.slice(0, lastCol));
+      out.push({ name: ws.getSheetName(), rows });
+    }
+    return out;
   }
 
   // rows (array-of-arrays from SheetJS) -> Univer cellData { r: { c: { v } } }
@@ -1027,12 +1065,78 @@
 
   async function renderSpreadsheet(doc, viewer, bust) {
     const wrap = el('div', { class: 'sheet-frame-wrap' });
-    const note = el('div', { class: 'sheet-note' },
-      'Spreadsheet preview — editing and saving aren’t supported yet (view-only).');
+    // Editable since #24 phase 2/3: a save bar (status + Save ⌘S) sits above
+    // the grid. .csv round-trips as text, .xlsx as a binary workbook.
+    const isCsv = doc.ext === 'csv';
+    const bar = el('div', { class: 'sheet-bar' });
+    bar.appendChild(el('span', { class: 'sheet-note' },
+      isCsv ? 'Editable spreadsheet — saves back as CSV (single sheet).'
+            : 'Editable spreadsheet — saves back as XLSX. Cell values + sheets are preserved; formulas/styles/merges are not.'));
+    const status = el('span', { class: 'sheet-status' });
+    const saveBtn = el('button', { class: 'sheet-save', disabled: 'true' }, 'Save  ⌘S');
+    bar.appendChild(status);
+    bar.appendChild(saveBtn);
     const host = el('div', { class: 'sheet-host' });
-    wrap.appendChild(note);
+    wrap.appendChild(bar);
     wrap.appendChild(host);
     viewer.appendChild(wrap);
+
+    const markDirty = () => {
+      if (!_sheetReady || _sheetDirty) return;
+      _sheetDirty = true;
+      saveBtn.disabled = false;
+      status.textContent = '● Unsaved changes';
+      status.className = 'sheet-status dirty';
+    };
+
+    const doSave = async () => {
+      if (!_activeUniver || !_sheetDirty) return;
+      const XLSX = window.XLSX;
+      status.textContent = 'Saving…';
+      status.className = 'sheet-status';
+      saveBtn.disabled = true;
+      try {
+        const sheets = readUniverSheets();
+        const outWb = XLSX.utils.book_new();
+        sheets.forEach((s, i) => {
+          const ws = XLSX.utils.aoa_to_sheet(s.rows.length ? s.rows : [[]]);
+          // Sheet names: max 31 chars, no []:*?/\ — fall back to Sheet{n}.
+          const safe = (s.name || ('Sheet' + (i + 1))).replace(/[[\]:*?/\\]/g, ' ').slice(0, 31) || ('Sheet' + (i + 1));
+          XLSX.utils.book_append_sheet(outWb, ws, safe);
+        });
+        let body, contentType;
+        if (isCsv) {
+          // CSV is single-sheet by nature — serialize the first sheet only.
+          // RFC-4180 quoting (SheetJS quotes fields with , " or newline),
+          // comma delimiter, \n line endings, no forced trailing newline.
+          const firstName = outWb.SheetNames[0];
+          body = XLSX.utils.sheet_to_csv(outWb.Sheets[firstName], { forceQuotes: false });
+          contentType = 'text/csv; charset=utf-8';
+        } else {
+          const u8 = XLSX.write(outWb, { bookType: 'xlsx', type: 'array' });
+          body = new Blob([u8], { type: 'application/octet-stream' });
+          contentType = 'application/octet-stream';
+        }
+        const resp = await fetch('/api/save?path=' + encodeURIComponent(doc.path), {
+          method: 'POST',
+          headers: { 'Content-Type': contentType },
+          body,
+        });
+        const data = await resp.json().catch(() => ({}));
+        if (!resp.ok || !data.ok) throw new Error(data.error || ('HTTP ' + resp.status));
+        _sheetDirty = false;
+        status.textContent = 'Saved ✓';
+        status.className = 'sheet-status ok';
+        const idx = state.docs.find(d => d.path === doc.path);
+        if (idx) { idx.size = data.size; idx.mtime = data.mtime; }
+        setTimeout(() => { if (status.textContent === 'Saved ✓') status.textContent = ''; }, 1500);
+      } catch (err) {
+        status.textContent = 'Error: ' + err.message;
+        status.className = 'sheet-status error';
+        saveBtn.disabled = false;
+      }
+    };
+    saveBtn.addEventListener('click', doSave);
 
     try {
       await loadUniverAssets();
@@ -1071,7 +1175,20 @@
         presets: [UniverSheetsCorePreset({ container: host })],
       });
       _activeUniver = inst;
+      _sheetDoc = doc;
       inst.univerAPI.createWorkbook({ id: 'doc-' + doc.path, name: doc.name, sheetOrder, sheets });
+
+      // Flag dirty on any data-changing command. Univer command types:
+      // 0=COMMAND, 1=OPERATION (selection/scroll — ignore), 2=MUTATION (the
+      // actual data changes). Gate on _sheetReady so the load-time mutations
+      // fired by createWorkbook don't mark a pristine sheet dirty.
+      inst.univerAPI.onCommandExecuted((command) => {
+        if (command && command.type === 2) markDirty();
+      });
+      _sheetSaveFn = doSave;
+      // Defer the ready flag past this tick so createWorkbook's own mutations
+      // (which dispatch synchronously / microtask) are ignored.
+      setTimeout(() => { _sheetReady = true; }, 0);
     } catch (err) {
       host.innerHTML = '';
       wrap.appendChild(el('div', { class: 'empty' }, 'Could not render spreadsheet: ' + escapeHtml(err.message)));
@@ -1416,6 +1533,11 @@
     if (meta && ev.key === 's' && state.editor) {
       ev.preventDefault();
       if (state.editorSaveFn) state.editorSaveFn();
+      return;
+    }
+    if (meta && ev.key === 's' && _sheetSaveFn) {
+      ev.preventDefault();
+      _sheetSaveFn();
       return;
     }
     // Cmd/Ctrl + +, -, 0 — zoom controls
@@ -1901,6 +2023,9 @@
   // routing them all through the async uiConfirm would require awaiting at every
   // call site, so we keep this one synchronous.
   function confirmDiscardEdits() {
+    // A dirty spreadsheet uses the same nav guard as the markdown editor so
+    // every navigation chokepoint protects unsaved cell edits too.
+    if (isSheetDirty() && !confirm('You have unsaved spreadsheet changes. Discard them?')) return false;
     if (!state.editor) return true;
     if (!isEditorDirty()) { destroyEditor(); return true; }
     if (confirm('You have unsaved changes. Discard them?')) { destroyEditor(); return true; }
