@@ -969,7 +969,9 @@ code {
    gets definite dimensions to measure against, like the PDF frame. */
 .sheet-frame-wrap {
   padding: 0;
-  height: calc(100vh - 52px - 40px - 4px);
+  /* topbar + tabbar + breadcrumb — must match the markdown editor so Univer's
+     sheet bar (bottom tab strip) sits inside the viewport, not below the fold. */
+  height: calc(100vh - 52px - 36px - 40px - 4px);
   display: flex;
   flex-direction: column;
   background: var(--bg);
@@ -1012,7 +1014,9 @@ code {
 /* docx editor (SuperDoc) — mirrors the spreadsheet frame */
 .docx-frame-wrap {
   padding: 0;
-  height: calc(100vh - 52px - 40px - 4px);
+  /* topbar + tabbar + breadcrumb — mirrors .sheet-frame-wrap so the editor
+     fits the visible workspace instead of overflowing below it. */
+  height: calc(100vh - 52px - 36px - 40px - 4px);
   display: flex;
   flex-direction: column;
   background: var(--bg);
