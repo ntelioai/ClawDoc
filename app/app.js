@@ -245,6 +245,60 @@
       value, placeholder: opts.placeholder || '', okLabel: opts.okLabel, cancelLabel: opts.cancelLabel,
     } });
 
+  // ---------- toasts (non-blocking feedback for file operations) ----------
+  // A single bottom-centre stack. fileOpToast() shows a spinner the instant an
+  // async file op starts, then resolves *the same toast in place* into a
+  // success (with optional Undo) or error state — so the user sees
+  // "Moving…" → "Moved · Undo" without a blocking dialog or a full-screen
+  // overlay. The spinner covers the request + reindex lag; the result toast
+  // auto-dismisses.
+  let toastHost = null;
+  function ensureToastHost() {
+    if (!toastHost) {
+      toastHost = el('div', { class: 'toast-host' });
+      document.body.appendChild(toastHost);
+    }
+    return toastHost;
+  }
+
+  function fileOpToast(pendingMessage) {
+    const host = ensureToastHost();
+    const icon = el('span', { class: 'toast-icon toast-spinner' });
+    const msg = el('span', { class: 'toast-msg' }, pendingMessage || 'Working…');
+    const actions = el('span', { class: 'toast-actions' });
+    const toast = el('div', { class: 'toast toast-pending' }, [icon, msg, actions]);
+    host.appendChild(toast);
+    requestAnimationFrame(() => toast.classList.add('toast-in'));
+
+    let autoTimer = null;
+    function dismiss() {
+      if (autoTimer) { clearTimeout(autoTimer); autoTimer = null; }
+      if (!toast.isConnected) return;
+      toast.classList.remove('toast-in');
+      toast.classList.add('toast-out');
+      setTimeout(() => { try { toast.remove(); } catch {} }, 200);
+    }
+    function settle(kind, text, opts = {}) {
+      const { actionLabel, onAction, duration = 6000 } = opts;
+      toast.className = 'toast toast-in toast-' + kind;
+      icon.className = 'toast-icon';
+      icon.textContent = kind === 'error' ? '⚠' : '✓';
+      msg.textContent = text;
+      actions.textContent = '';
+      if (actionLabel && onAction) {
+        const btn = el('button', { class: 'toast-action' }, actionLabel);
+        btn.addEventListener('click', () => { dismiss(); onAction(); });
+        actions.appendChild(btn);
+      }
+      if (duration) autoTimer = setTimeout(dismiss, duration);
+    }
+    return {
+      success: (text, opts) => settle('ok', text, opts),
+      error:   (text, opts) => settle('error', text, { duration: 8000, ...opts }),
+      dismiss,
+    };
+  }
+
   // ---------- icons ----------
   const ICON_FOLDER = '<svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M10 4H4c-1.1 0-1.99.9-1.99 2L2 18c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V8c0-1.1-.9-2-2-2h-8l-2-2z" opacity="0.85"/></svg>';
   const ICON_FOLDER_OPEN = '<svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M20 6h-8l-2-2H4c-1.1 0-1.99.9-1.99 2L2 18c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V8c0-1.1-.9-2-2-2zm0 12H4V8h16v10z" opacity="0.85"/></svg>';
@@ -3603,6 +3657,11 @@
   }
 
   async function mcMove(srcPath, destFolderPath) {
+    const name = basename(srcPath);
+    const destLabel = destFolderPath ? (basename(destFolderPath) || destFolderPath)
+                                     : dropWorkspace(srcPath);
+    // Spinner shows immediately; it carries the request + reindex lag.
+    const toast = fileOpToast('Moving “' + name + '”…');
     try {
       const r = await fetch('/api/move', {
         method: 'POST',
@@ -3611,7 +3670,7 @@
       });
       const data = await r.json().catch(() => ({}));
       if (!r.ok || !data.ok) throw new Error(data.error || ('HTTP ' + r.status));
-      if (data.unchanged) return;
+      if (data.unchanged) { toast.dismiss(); return; }
       setStatus('moved → ' + (destFolderPath || data.newPath.split('/')[0] + '/'), 'ok');
       // SSE/chokidar will refresh the panes once the indexer catches up;
       // until then, optimistically auto-expand the destination in both panes
@@ -3623,9 +3682,18 @@
       // Same optimism for the main sidebar tree, so a file dragged from the
       // listing pane into a tree folder lands somewhere already visible.
       state.expanded.add(dest);
+      // Undo = move the item from its new location back to its original parent.
+      // A bare workspace name (no slash) means the original parent was the
+      // workspace root; '' resolves to the source's workspace root server-side.
+      const origParent = dirname(srcPath);
+      const undoDest = origParent.includes('/') ? origParent : '';
+      toast.success('Moved “' + name + '” to ' + destLabel, {
+        actionLabel: 'Undo',
+        onAction: () => mcMove(data.newPath, undoDest),
+      });
     } catch (err) {
       setStatus('move failed', 'error');
-      uiAlert('Move failed: ' + err.message);
+      toast.error('Move failed: ' + err.message);
     }
   }
 
@@ -3890,6 +3958,7 @@
       { title: 'Move to ' + trashWord, kind: 'danger' }
     );
     if (!ok) return;
+    const toast = fileOpToast('Deleting “' + name + '”…');
     try {
       const r = await fetch('/api/delete', {
         method: 'POST',
@@ -3899,11 +3968,12 @@
       const data = await r.json().catch(() => ({}));
       if (!r.ok || !data.ok) throw new Error(data.error || ('HTTP ' + r.status));
       setStatus(data.trashed ? 'moved to Trash' : 'deleted', 'ok');
+      toast.success(data.trashed ? `“${name}” moved to ${trashWord}` : `“${name}” deleted`);
       // SSE reindex will re-render the tree; the live-reload handler will
       // also show the "this doc was removed" empty state if the user was
       // viewing the deleted file.
     } catch (err) {
-      uiAlert('Delete failed: ' + err.message);
+      toast.error('Delete failed: ' + err.message);
     }
   }
 
@@ -3927,6 +3997,7 @@
   async function pasteIntoFolder(destFolderPath) {
     if (!state.clipboard) return;
     const clip = state.clipboard;
+    const toast = fileOpToast('Pasting “' + clip.name + '”…');
     try {
       const r = await fetch('/api/copy', {
         method: 'POST',
@@ -3935,12 +4006,9 @@
       });
       const data = await r.json().catch(() => ({}));
       if (!r.ok || !data.ok) throw new Error(data.error || ('HTTP ' + r.status));
-      setStatus(
-        data.renamed
-          ? `pasted as ${data.newPath.split('/').pop()}`
-          : 'pasted',
-        'ok'
-      );
+      const pastedName = data.newPath.split('/').pop();
+      setStatus(data.renamed ? `pasted as ${pastedName}` : 'pasted', 'ok');
+      toast.success(data.renamed ? `Pasted as “${pastedName}”` : `Pasted “${pastedName}”`);
       // Expand destination in both panes + main tree so the new item is
       // visible the moment the index update arrives.
       state.expanded.add(destFolderPath);
@@ -3966,7 +4034,7 @@
       });
     } catch (err) {
       setStatus('paste failed', 'error');
-      uiAlert('Paste failed: ' + err.message);
+      toast.error('Paste failed: ' + err.message);
     }
   }
 
