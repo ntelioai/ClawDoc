@@ -4234,6 +4234,30 @@
     return true;
   }
 
+  // Parent folder for the sidebar New File / New Folder buttons: the focused
+  // folder (state.currentFolder is also set to the open doc's folder), falling
+  // back to the first workspace root when nothing is focused. The server's
+  // mkdir/touch reject an empty parent, so root must be a workspace name.
+  function treeCreateTarget() {
+    return state.currentFolder
+      || (state.index && state.index.roots && state.index.roots[0] && state.index.roots[0].name)
+      || '';
+  }
+
+  // Parent folder for an MC pane's New Folder button: the pane's focused item
+  // (its parent dir if a file is focused), falling back to the first workspace
+  // root when nothing is focused.
+  function mcCreateTarget(paneId) {
+    const focused = state.mcPanes[paneId] && state.mcPanes[paneId].focused;
+    const rootFallback = (state.index && state.index.roots && state.index.roots[0] && state.index.roots[0].name) || '';
+    if (!focused) return rootFallback;
+    if (state.docsByPath && state.docsByPath.has(focused)) {
+      const f = state.docsByPath.get(focused).folder; // a file is focused -> use its folder
+      return (f && f !== '.') ? f : rootFallback;
+    }
+    return focused; // a folder is focused
+  }
+
   async function createFolderIn(parentPath) {
     const name = await uiPrompt('New folder name:', '', { title: 'New folder', placeholder: 'folder-name' });
     if (name == null) return;
@@ -4379,6 +4403,8 @@
     }, 80));
     $('#tree-expand-all').addEventListener('click', expandAllFolders);
     $('#tree-collapse-all').addEventListener('click', collapseAllFolders);
+    $('#tree-new-file').addEventListener('click', () => createMarkdownIn(treeCreateTarget()));
+    $('#tree-new-folder').addEventListener('click', () => createFolderIn(treeCreateTarget()));
     applyTreeDisplayMode();
     $('#tree-display-toggle').addEventListener('click', toggleTreeDisplay);
     $('#quick-open').addEventListener('click', (ev) => {
@@ -4402,6 +4428,9 @@
     });
     document.querySelectorAll('[data-pane-collapse-all]').forEach((btn) => {
       btn.addEventListener('click', () => collapseAllInMcPane(btn.getAttribute('data-pane-collapse-all')));
+    });
+    document.querySelectorAll('[data-pane-new-folder]').forEach((btn) => {
+      btn.addEventListener('click', () => createFolderIn(mcCreateTarget(btn.getAttribute('data-pane-new-folder'))));
     });
     applyMcMode(); // restore persisted mc state
 
