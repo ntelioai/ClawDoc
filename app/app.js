@@ -4598,6 +4598,48 @@
     showCtxMenu(x, y, items, hasDoc ? basename(t.docPath) : 'Tab');
   }
 
+  // ---------- pandoc export (pandoc-wasm, lazy) ----------
+  // Reuses the same vendored pandoc.wasm the terminal shim uses, but loaded in
+  // the renderer so "Export → Word" works with no terminal / no Claude. ~56 MB,
+  // so it loads on first export only.
+  let _pandocLoad = null;
+  function loadPandoc() {
+    if (!_pandocLoad) {
+      _pandocLoad = (async () => {
+        const mod = await import('/app/vendor/pandoc/core.js');
+        const resp = await fetch('/app/vendor/pandoc/pandoc.wasm');
+        if (!resp.ok) throw new Error('pandoc.wasm HTTP ' + resp.status);
+        return mod.createPandocInstance(await resp.arrayBuffer());
+      })();
+    }
+    return _pandocLoad;
+  }
+
+  async function exportDocToDocx(doc) {
+    const fromFmt = (doc.ext === 'html' || doc.ext === 'htm') ? 'html' : 'markdown';
+    const toast = fileOpToast('Exporting “' + (doc.title || doc.name) + '” to .docx…');
+    try {
+      const r = await fetch('/file?path=' + encodeURIComponent(doc.path) + '&_ts=' + Date.now(), { cache: 'no-store' });
+      if (!r.ok) throw new Error('HTTP ' + r.status);
+      let text = await r.text();
+      // Drop YAML front-matter so it doesn't surface as a stray table in Word.
+      if (fromFmt === 'markdown') text = text.replace(/^---\n[\s\S]*?\n---\n+/, '');
+      const pandoc = await loadPandoc();
+      const result = await pandoc.convert(
+        { from: fromFmt, to: 'docx', standalone: true, 'output-file': 'out.docx' }, text, {});
+      const blob = result.files['out.docx'];
+      if (!blob) throw new Error((result.stderr || 'no output produced').slice(0, 120));
+      const base = (doc.name || 'document').replace(/\.[^.]+$/, '');
+      const url = URL.createObjectURL(blob);
+      const a = el('a', { href: url, download: base + '.docx' });
+      document.body.appendChild(a); a.click(); a.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 5000);
+      toast.success('Exported ' + base + '.docx');
+    } catch (err) {
+      toast.error('Export failed: ' + err.message);
+    }
+  }
+
   // ---------- context menu ----------
   function buildEmbedUrl(docPath, anchor) {
     return location.origin + location.pathname + '?embed=1#doc=' + encodeURIComponent(docPath) + (anchor ? '&a=' + encodeURIComponent(anchor) : '');
@@ -4663,10 +4705,16 @@
       { label: 'Open in new browser window', onClick: () => openInBrowserWindow(doc.path) },
       '-',
       { label: 'Copy', onClick: () => copyToClipboard(doc.path, 'file', doc.name) },
+    ];
+    // Export → Word for text docs (markdown/HTML) via the bundled pandoc-wasm.
+    if (!multi && ['md', 'markdown', 'html', 'htm'].includes(doc.ext)) {
+      items.push('-', { label: 'Export to Word (.docx)', onClick: () => exportDocToDocx(doc) });
+    }
+    items.push(
       '-',
       { label: 'Reveal in Finder', onClick: () => { fetch('/api/open?path=' + encodeURIComponent(doc.path)).catch(() => {}); } },
       { label: 'Copy path', onClick: () => navigator.clipboard.writeText(doc.path) },
-    ];
+    );
     if (!isRoot) {
       items.push('-');
       if (!multi) items.push({ label: 'Rename…', onClick: () => renameNode(doc.path, doc.name, false) });

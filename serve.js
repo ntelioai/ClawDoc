@@ -15,6 +15,26 @@ const github = require('./github');
 
 const SCRIPT_DIR = __dirname;
 const APP_DIR = path.join(SCRIPT_DIR, 'app');
+
+// Bundled pandoc-wasm shim. Exposed on the embedded terminal/agent PATH so
+// Claude Code can run `pandoc` with no native install (it's a script that runs
+// the wasm via this process's Node/Electron runtime — see app/vendor/pandoc/).
+// A packaged asar is read-only and a shell can't exec from inside it, so target
+// the unpacked copy (forge.config.js unpacks vendor/pandoc); in dev __dirname
+// has no app.asar so the path is used as-is.
+const PANDOC_BIN_DIR = path.join(APP_DIR, 'vendor', 'pandoc', 'bin')
+  .replace(`app.asar${path.sep}`, `app.asar.unpacked${path.sep}`);
+// Build the env for spawned terminal/agent processes: prepend the bundled tools
+// to PATH and hand them the Node/Electron binary to run the wasm shim with.
+function terminalEnv(extra) {
+  const sep = process.platform === 'win32' ? ';' : ':';
+  return {
+    ...process.env,
+    PATH: PANDOC_BIN_DIR + sep + (process.env.PATH || ''),
+    CLAWDOC_NODE: process.execPath,
+    ...extra,
+  };
+}
 // Writable data directory — overridable so packaged apps can redirect to userData.
 const DATA_DIR = process.env.CLAWDOC_DATA_DIR || SCRIPT_DIR;
 const INDEX_PATH = path.join(DATA_DIR, 'index.json');
@@ -156,6 +176,8 @@ const MIME = {
   '.html': 'text/html; charset=utf-8',
   '.htm': 'text/html; charset=utf-8',
   '.js': 'application/javascript; charset=utf-8',
+  '.mjs': 'application/javascript; charset=utf-8',
+  '.wasm': 'application/wasm',
   '.css': 'text/css; charset=utf-8',
   '.json': 'application/json; charset=utf-8',
   '.md': 'text/plain; charset=utf-8',
@@ -1136,7 +1158,7 @@ async function attachTerminal(ws, query) {
         name: 'xterm-256color',
         cols, rows,
         cwd,
-        env: { ...process.env, TERM: 'xterm-256color', COLORTERM: 'truecolor' },
+        env: terminalEnv({ TERM: 'xterm-256color', COLORTERM: 'truecolor' }),
       });
     } catch (err) {
       lastErr = err;
@@ -1262,7 +1284,7 @@ function attachAgent(ws, query) {
   let child = null, chosenBin, lastErr;
   for (const bin of findClaudeBinary()) {
     try {
-      child = spawn(bin, args, { cwd, env: { ...process.env }, stdio: ['pipe', 'pipe', 'pipe'] });
+      child = spawn(bin, args, { cwd, env: terminalEnv(), stdio: ['pipe', 'pipe', 'pipe'] });
       chosenBin = bin;
       break;
     } catch (err) { lastErr = err; child = null; }

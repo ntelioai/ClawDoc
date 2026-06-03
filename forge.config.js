@@ -74,7 +74,12 @@ module.exports = {
     // stays inside the asar. The auto-unpack-natives plugin only unpacks
     // *.node files, so we extend the pattern to also cover spawn-helper and
     // any other native dylibs/sos a module might ship.
-    asar: { unpack: '**/{spawn-helper,*.dylib,*.so}' },
+    // spawn-helper + native libs must be real files (PTY execs them). The
+    // bundled pandoc-wasm tools (vendor/pandoc/**) are unpacked too: the
+    // embedded terminal's shell execs the `pandoc` shim and the Node runtime
+    // reads pandoc.wasm/core.js from a real path, neither of which works from
+    // inside the read-only asar.
+    asar: { unpack: '**/{spawn-helper,*.dylib,*.so,vendor/pandoc/**}' },
     // Universal-build merging: node-pty's prebuild structure differs between
     // arm64 (locally compiled .node in build/Release) and x64 (downloaded
     // prebuild under bin/darwin-x64-*). Tell @electron/universal to keep

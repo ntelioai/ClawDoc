@@ -1,0 +1,9 @@
+#!/bin/sh
+# ClawDoc-bundled `pandoc` (pandoc-wasm). Placed on the embedded terminal's PATH
+# so Claude Code — or any shell command — can convert documents without a native
+# pandoc install. Runs the wasm CLI through the Node runtime ClawDoc points us at
+# via CLAWDOC_NODE (Electron-as-node in the packaged app, plain node in dev);
+# falls back to `node` on PATH. ELECTRON_RUN_AS_NODE is harmless for plain node.
+DIR=$(cd "$(dirname "$0")/.." && pwd)
+NODE=${CLAWDOC_NODE:-node}
+ELECTRON_RUN_AS_NODE=1 exec "$NODE" "$DIR/pandoc-cli.mjs" "$@"
