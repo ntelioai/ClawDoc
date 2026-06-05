@@ -14,9 +14,10 @@ Everything is local — there's no server, no upload, no telemetry. ClawDoc read
 
 ## Download
 
-**[Download ClawDoc 0.2.0 for macOS (Universal: Apple Silicon + Intel)](https://github.com/ntelioai/ClawDoc/releases/latest/download/ClawDoc-0.2.0-universal.dmg)** · 211 MB
+**[Download ClawDoc 0.2.0 for macOS (Universal: Apple Silicon + Intel)](https://github.com/ntelioai/ClawDoc/releases/latest/download/ClawDoc-0.2.0-universal.dmg)** · 211 MB  
+**[Download ClawDoc 0.2.0 for Windows (x64)](https://github.com/ntelioai/ClawDoc/releases/download/v0.2.0/ClawDoc-0.2.0+Setup.exe)**
 
-Windows and Linux builds are not published yet — the `forge.config.js` is set up for them, but the binaries aren't being produced in CI. Build from source if you need them today (see [Build from source](#build-from-source)).
+Linux builds are not published yet — the `forge.config.js` is set up for them, but the binaries aren't being produced in CI. Build from source if you need them today (see [Build from source](#build-from-source)).
 
 ### First-launch on macOS
 
