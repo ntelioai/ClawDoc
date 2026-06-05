@@ -953,7 +953,11 @@ code {
 .html-frame {
   display: block;
   width: 100%;
-  height: calc(100vh - 52px - 40px - 4px);
+  /* Fill the wrapper (already height:100% of the viewer) rather than
+     recomputing from 100vh — the old calc() assumed a fixed 96px of chrome
+     and broke once the tab strip pushed the viewer down to ~129px, leaving
+     the iframe taller than the visible pane and clipping its bottom. */
+  height: 100%;
   border: none;
   background: white;
 }
@@ -961,7 +965,10 @@ code {
 /* PDF view */
 .pdf-frame-wrap {
   padding: 0;
-  height: calc(100vh - 52px - 40px - 4px);
+  /* Fill the viewer (already height-bounded) instead of recomputing from
+     100vh — the old calc omitted the 36px tab strip, so the wrap ran ~33px
+     past the viewport and produced a second scrollbar outside the PDF's own. */
+  height: 100%;
   background: #2a2926;
   position: relative;
 }
