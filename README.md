@@ -1,6 +1,10 @@
-# ClawDoc
+<p align="center">
+  <img src="app/assets/clawdoc-logo.png" alt="ClawDoc" width="240">
+</p>
 
-**The agentic IDE for documents.**
+<h1 align="center">ClawDoc</h1>
+
+<p align="center"><strong>The agentic IDE for documents.</strong></p>
 
 ClawDoc brings the developer's workflow — a file tree, a fast editor, full-text search, git, and an AI agent that knows what you're working on — to everyday business and technical documents. Point it at one or more folders on disk and it walks them, builds a searchable index, and gives you a Google-Drive-style tree on the left and a rendered document on the right. The **Claude** button opens a Claude Code agent cwd'd to the workspace of the document you're looking at, so it can read, draft, and edit your files in place.
 
