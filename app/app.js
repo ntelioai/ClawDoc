@@ -917,6 +917,38 @@
     persistTabs();
     renderTree();
   }
+  // #52 — progressive collapse. Each click on the collapse button closes one
+  // level, walking up from the focused folder toward its workspace root: first
+  // the focused folder's subtree, then its parent's, then the grandparent's, …
+  // The final click leaves the workspace (mounted) folder visible but with all
+  // of its subfolders closed, then the walk restarts on the next click.
+  function progressiveCollapse() {
+    const focus = state.currentFolder
+      || (state.currentDoc ? (state.currentDoc.folder === '.' ? '' : state.currentDoc.folder) : '')
+      || '';
+    // No folder in focus — fall back to the blanket collapse.
+    if (!focus) { state.collapseCursor = null; collapseAllFolders(); return; }
+    const mount = focus.split('/')[0]; // workspace root that owns the focus
+
+    // (Re)anchor the walk at the focused folder whenever the previous cursor is
+    // no longer an ancestor of (or equal to) the focus — e.g. the selection moved.
+    let cursor = state.collapseCursor;
+    if (!cursor || !(focus === cursor || focus.startsWith(cursor + '/'))) cursor = focus;
+
+    // Collapse this level: the cursor folder plus everything beneath it.
+    for (const p of subtreePaths(cursor)) state.expanded.delete(p);
+
+    if (cursor === mount) {
+      // Reached the workspace root — keep it expanded but with every subfolder
+      // closed, then restart from the focus on the next click.
+      state.expanded.add(mount);
+      state.collapseCursor = null;
+    } else {
+      state.collapseCursor = dirname(cursor) || mount;
+    }
+    persistTabs();
+    renderTree();
+  }
 
   // ---------- selection / routing ----------
   function selectFolder(folderPath, pushHash = true) {
@@ -2585,7 +2617,34 @@
     const body = $('#settings-body');
     body.innerHTML = '';
 
+    // #54 — vertical tabs. A left rail drives a set of panels; each settings
+    // group is appended to its own panel instead of straight onto the body, so
+    // the dialog is grouped rather than one long scroll.
+    const tabsRail = el('div', { class: 'settings-tabs' });
+    const panels = el('div', { class: 'settings-panels' });
+    body.appendChild(tabsRail);
+    body.appendChild(panels);
+    const _tabs = [];
+    const activateSettingsTab = (id) => {
+      state.settingsTab = id;
+      _tabs.forEach((t) => {
+        const on = t.id === id;
+        t.btn.classList.toggle('active', on);
+        t.panel.classList.toggle('active', on);
+      });
+    };
+    const tab = (id, label) => {
+      const panel = el('div', { class: 'settings-tabpanel', 'data-tab': id });
+      panels.appendChild(panel);
+      const btn = el('button', { class: 'settings-tab', type: 'button' }, label);
+      btn.addEventListener('click', () => activateSettingsTab(id));
+      tabsRail.appendChild(btn);
+      _tabs.push({ id, btn, panel });
+      return panel;
+    };
+
     // ---- Workspaces (editable) ----
+    const wsPanel = tab('workspaces', 'Workspaces');
     const wsSection = el('div', { class: 'settings-section' });
     wsSection.appendChild(el('h3', null, 'Workspaces'));
 
@@ -2676,18 +2735,18 @@
         'Workspaces persist to settings.json next to the ClawDoc scripts. The Reindex button and the index.js CLI both read it.'
       ));
     }
-    body.appendChild(wsSection);
+    wsPanel.appendChild(wsSection);
 
     // GitHub section
-    body.appendChild(gh.renderSettingsSection());
+    tab('github', 'GitHub').appendChild(gh.renderSettingsSection());
 
-    // Claude client selector (single-button routing)
-    body.appendChild(renderClaudeClientSection());
-
-    // Model provider section (#43)
-    body.appendChild(renderProviderSection());
+    // Claude client selector + model provider (#43)
+    const claudePanel = tab('claude', 'Claude');
+    claudePanel.appendChild(renderClaudeClientSection());
+    claudePanel.appendChild(renderProviderSection());
 
     // Stats
+    const indexPanel = tab('index', 'Index');
     if (state.index && state.index.stats) {
       const statsSection = el('div', { class: 'settings-section' });
       statsSection.appendChild(el('h3', null, 'Index'));
@@ -2707,7 +2766,7 @@
       }
       statsSection.appendChild(list);
       statsSection.appendChild(buildReindexRow());
-      body.appendChild(statsSection);
+      indexPanel.appendChild(statsSection);
     } else {
       // No index yet — still offer a way to generate one from Settings.
       const statsSection = el('div', { class: 'settings-section' });
@@ -2715,10 +2774,11 @@
       statsSection.appendChild(el('div', { class: 'settings-help' },
         'No index yet — rescan the filesystem to generate one.'));
       statsSection.appendChild(buildReindexRow());
-      body.appendChild(statsSection);
+      indexPanel.appendChild(statsSection);
     }
 
     // Reset / storage
+    const prefsPanel = tab('prefs', 'Preferences');
     const resetSection = el('div', { class: 'settings-section' });
     resetSection.appendChild(el('h3', null, 'Saved preferences'));
     const resetList = el('div', { class: 'settings-list' });
@@ -2761,9 +2821,10 @@
     });
     clearAllRow.appendChild(allBtn);
     resetSection.appendChild(clearAllRow);
-    body.appendChild(resetSection);
+    prefsPanel.appendChild(resetSection);
 
     // ---- About ----
+    const aboutPanel = tab('about', 'About');
     const aboutSection = el('div', { class: 'settings-section' });
     aboutSection.appendChild(el('h3', null, 'About'));
     const aboutBody = el('div', { class: 'settings-help' });
@@ -2785,7 +2846,10 @@
     licWrap.appendChild(document.createTextNode('.'));
     aboutBody.appendChild(licWrap);
     aboutSection.appendChild(aboutBody);
-    body.appendChild(aboutSection);
+    aboutPanel.appendChild(aboutSection);
+
+    // Restore the previously-active tab (default: Workspaces).
+    activateSettingsTab(_tabs.some((t) => t.id === state.settingsTab) ? state.settingsTab : 'workspaces');
   }
 
   // ---------- zoom ----------
@@ -3406,8 +3470,8 @@
   }
   function agClear() {
     const l = agLog();
-    if (l) l.innerHTML = '<div class="agent-empty">Structured Claude session. Type below to start. '
-      + 'This is the rich client — the <code>Claude</code> button is the PTY terminal.</div>';
+    if (l) l.innerHTML = '<div class="agent-empty">Ask Claude anything about your docs — '
+      + 'type a message below to get started.</div>';
     agent.activeAssistant = null;
     agent.activeText = '';
     agent.toolCards = {};
@@ -5259,7 +5323,9 @@
     const isWorkspaceRoot = !node.path.includes('/');
     const items = [
       { label: 'New folder…',          onClick: () => createFolderIn(node.path) },
-      { label: 'New markdown file…',   onClick: () => createMarkdownIn(node.path) },
+      { label: 'New markdown file…',   onClick: () => createFileIn(node.path, 'md') },
+      { label: 'New Excel file…',      onClick: () => createFileIn(node.path, 'xlsx') },
+      { label: 'New Word document…',   onClick: () => createFileIn(node.path, 'docx') },
       '-',
       { label: 'Open in this tab', onClick: () => selectFolder(node.path) },
       { label: 'Open in new tab', onClick: () => newTab(null, { folder: node.path }) },
@@ -5572,8 +5638,18 @@
     }
   }
 
-  async function createMarkdownIn(parentPath) {
-    const name = await uiPrompt('New markdown file (`.md` will be added if omitted):', '', { title: 'New file', placeholder: 'notes.md' });
+  // Kinds the "New…" actions can create. The server (handleTouch) maps `kind`
+  // to the right extension + initial bytes (blank markdown, empty .xlsx/.docx).
+  const NEW_FILE_KINDS = {
+    md:   { ext: '`.md`',   label: 'markdown file', placeholder: 'notes.md' },
+    xlsx: { ext: '`.xlsx`', label: 'Excel file',    placeholder: 'budget.xlsx' },
+    docx: { ext: '`.docx`', label: 'Word document', placeholder: 'memo.docx' },
+  };
+
+  async function createFileIn(parentPath, kind = 'md') {
+    const k = NEW_FILE_KINDS[kind] || NEW_FILE_KINDS.md;
+    const name = await uiPrompt('New ' + k.label + ' (' + k.ext + ' will be added if omitted):', '',
+      { title: 'New ' + k.label, placeholder: k.placeholder });
     if (name == null) return;
     const trimmed = name.trim();
     if (!trimmed) return;
@@ -5581,7 +5657,7 @@
       const r = await fetch('/api/touch', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ parent: parentPath, name: trimmed }),
+        body: JSON.stringify({ parent: parentPath, name: trimmed, kind }),
       });
       const data = await r.json().catch(() => ({}));
       if (!r.ok || !data.ok) throw new Error(data.error || ('HTTP ' + r.status));
@@ -5608,6 +5684,8 @@
       uiAlert('Create file failed: ' + err.message);
     }
   }
+  // Back-compat alias — older call sites create markdown.
+  function createMarkdownIn(parentPath) { return createFileIn(parentPath, 'md'); }
 
   // ---------- sidebar resize ----------
   const SIDEBAR_MIN = 180;
@@ -5693,11 +5771,34 @@
       renderTree();
     }, 80));
     $('#tree-expand-all').addEventListener('click', expandAllFolders);
-    $('#tree-collapse-all').addEventListener('click', collapseAllFolders);
-    $('#tree-new-file').addEventListener('click', () => createMarkdownIn(treeCreateTarget()));
-    $('#tree-new-folder').addEventListener('click', () => createFolderIn(treeCreateTarget()));
+    $('#tree-collapse-all').addEventListener('click', progressiveCollapse);
+    $('#tree-new').addEventListener('click', (ev) => {
+      // Stop the document-level click handler from immediately dismissing the
+      // menu we're about to open.
+      ev.stopPropagation();
+      const rect = ev.currentTarget.getBoundingClientRect();
+      const target = treeCreateTarget();
+      showCtxMenu(rect.left, rect.bottom + 4, [
+        { label: 'New folder…',        onClick: () => createFolderIn(target) },
+        { label: 'New markdown file…', onClick: () => createFileIn(target, 'md') },
+        { label: 'New Excel file…',    onClick: () => createFileIn(target, 'xlsx') },
+        { label: 'New Word document…', onClick: () => createFileIn(target, 'docx') },
+      ]);
+    });
     applyTreeDisplayMode();
     $('#tree-display-toggle').addEventListener('click', toggleTreeDisplay);
+    // #49 — hide/show the whole folder panel, persisted across sessions.
+    const applySidebarHidden = (hidden) => {
+      document.body.classList.toggle('sidebar-hidden', hidden);
+      const btn = $('#sidebar-toggle');
+      if (btn) btn.title = hidden ? 'Show folder panel' : 'Hide folder panel';
+    };
+    applySidebarHidden(localStorage.getItem('clawdoc.sidebarHidden') === '1');
+    $('#sidebar-toggle').addEventListener('click', () => {
+      const hidden = !document.body.classList.contains('sidebar-hidden');
+      localStorage.setItem('clawdoc.sidebarHidden', hidden ? '1' : '0');
+      applySidebarHidden(hidden);
+    });
     $('#quick-open').addEventListener('click', (ev) => {
       if (ev.target.id === 'quick-open') closeQuickOpen();
     });

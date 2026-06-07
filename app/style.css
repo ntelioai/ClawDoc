@@ -363,6 +363,9 @@ body.embed .doc-view { max-width: 860px; }
 }
 
 /* ---------- sidebar ---------- */
+/* #49 — fully hide the folder panel (and its resizer) to maximize content. */
+body.sidebar-hidden .sidebar,
+body.sidebar-hidden #sidebar-resizer { display: none; }
 .sidebar {
   width: 320px;
   flex-shrink: 0;
@@ -1224,10 +1227,44 @@ mark.hl { background: #ffe9a8; color: inherit; padding: 0 1px; border-radius: 2p
   border-radius: 5px;
 }
 .settings-close:hover { background: var(--bg-hover); color: var(--text); }
+/* #54 — vertical tabs: a left rail of tab buttons + a scrolling panel area. */
 .settings-body {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+}
+.settings-tabs {
+  flex-shrink: 0;
+  width: 150px;
+  border-right: 1px solid var(--border);
+  padding: 12px 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  overflow-y: auto;
+}
+.settings-tab {
+  text-align: left;
+  padding: 7px 10px;
+  border: none;
+  background: transparent;
+  border-radius: 6px;
+  font-size: 13px;
+  font-family: inherit;
+  color: var(--text-muted);
+  cursor: pointer;
+}
+.settings-tab:hover { background: var(--bg-hover); color: var(--text); }
+.settings-tab.active { background: var(--bg-active); color: var(--text); font-weight: 600; }
+.settings-panels {
+  flex: 1;
+  min-width: 0;
   padding: 14px 18px 18px;
   overflow-y: auto;
 }
+.settings-tabpanel { display: none; }
+.settings-tabpanel.active { display: block; }
 .settings-section { margin-bottom: 18px; }
 .settings-section:last-child { margin-bottom: 0; }
 .settings-section h3 {

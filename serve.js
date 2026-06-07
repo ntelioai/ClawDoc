@@ -963,14 +963,133 @@ async function handleMkdir(res, body) {
   }
 }
 
+// ---------- empty office-file templates ----------
+// OOXML files (.xlsx/.docx) are just ZIPs of XML parts, so we hand-build a valid
+// empty workbook/document without pulling in a dependency. Entries are STORED
+// (uncompressed) — simplest to emit and SheetJS / SuperDoc open them cleanly.
+const CRC32_TABLE = (() => {
+  const t = new Int32Array(256);
+  for (let n = 0; n < 256; n++) {
+    let c = n;
+    for (let k = 0; k < 8; k++) c = (c & 1) ? (0xEDB88320 ^ (c >>> 1)) : (c >>> 1);
+    t[n] = c;
+  }
+  return t;
+})();
+function crc32(buf) {
+  let c = -1;
+  for (let i = 0; i < buf.length; i++) c = (c >>> 8) ^ CRC32_TABLE[(c ^ buf[i]) & 0xFF];
+  return (c ^ -1) >>> 0;
+}
+function buildZip(entries) {
+  const parts = [];
+  const central = [];
+  let offset = 0;
+  for (const e of entries) {
+    const nameBuf = Buffer.from(e.name, 'utf8');
+    const data = Buffer.isBuffer(e.data) ? e.data : Buffer.from(e.data, 'utf8');
+    const crc = crc32(data);
+    const local = Buffer.alloc(30);
+    local.writeUInt32LE(0x04034b50, 0);      // local file header signature
+    local.writeUInt16LE(20, 4);              // version needed
+    local.writeUInt16LE(0, 8);               // method: stored
+    local.writeUInt16LE(0x21, 12);           // mod date (1980-01-01)
+    local.writeUInt32LE(crc, 14);
+    local.writeUInt32LE(data.length, 18);    // compressed size
+    local.writeUInt32LE(data.length, 22);    // uncompressed size
+    local.writeUInt16LE(nameBuf.length, 26);
+    parts.push(local, nameBuf, data);
+
+    const cen = Buffer.alloc(46);
+    cen.writeUInt32LE(0x02014b50, 0);        // central directory signature
+    cen.writeUInt16LE(20, 4);                // version made by
+    cen.writeUInt16LE(20, 6);                // version needed
+    cen.writeUInt16LE(0, 10);                // method: stored
+    cen.writeUInt16LE(0x21, 14);             // mod date
+    cen.writeUInt32LE(crc, 16);
+    cen.writeUInt32LE(data.length, 20);
+    cen.writeUInt32LE(data.length, 24);
+    cen.writeUInt16LE(nameBuf.length, 28);
+    cen.writeUInt32LE(offset, 42);           // local header offset
+    central.push(cen, nameBuf);
+
+    offset += local.length + nameBuf.length + data.length;
+  }
+  const centralBuf = Buffer.concat(central);
+  const end = Buffer.alloc(22);
+  end.writeUInt32LE(0x06054b50, 0);          // end of central directory signature
+  end.writeUInt16LE(entries.length, 8);
+  end.writeUInt16LE(entries.length, 10);
+  end.writeUInt32LE(centralBuf.length, 12);
+  end.writeUInt32LE(offset, 16);
+  return Buffer.concat([...parts, centralBuf, end]);
+}
+const XML_DECL = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n';
+function emptyXlsx() {
+  return buildZip([
+    { name: '[Content_Types].xml', data: XML_DECL +
+      '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">' +
+      '<Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>' +
+      '<Default Extension="xml" ContentType="application/xml"/>' +
+      '<Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/>' +
+      '<Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>' +
+      '</Types>' },
+    { name: '_rels/.rels', data: XML_DECL +
+      '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">' +
+      '<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/>' +
+      '</Relationships>' },
+    { name: 'xl/workbook.xml', data: XML_DECL +
+      '<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">' +
+      '<sheets><sheet name="Sheet1" sheetId="1" r:id="rId1"/></sheets></workbook>' },
+    { name: 'xl/_rels/workbook.xml.rels', data: XML_DECL +
+      '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">' +
+      '<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/>' +
+      '</Relationships>' },
+    { name: 'xl/worksheets/sheet1.xml', data: XML_DECL +
+      '<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetData/></worksheet>' },
+  ]);
+}
+function emptyDocx() {
+  return buildZip([
+    { name: '[Content_Types].xml', data: XML_DECL +
+      '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">' +
+      '<Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>' +
+      '<Default Extension="xml" ContentType="application/xml"/>' +
+      '<Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/>' +
+      '</Types>' },
+    { name: '_rels/.rels', data: XML_DECL +
+      '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">' +
+      '<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/>' +
+      '</Relationships>' },
+    { name: 'word/document.xml', data: XML_DECL +
+      '<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">' +
+      '<w:body><w:p/><w:sectPr/></w:body></w:document>' },
+  ]);
+}
+
 async function handleTouch(res, body) {
   const parentPrefixed = String((body && body.parent) || '');
   let name = String((body && body.name) || '').trim();
+  const kind = String((body && body.kind) || 'md').toLowerCase();
   if (!parentPrefixed) return sendJson(res, 400, { error: 'missing parent' });
   if (!name) return sendJson(res, 400, { error: 'name required' });
-  // Auto-append .md if no extension supplied. Be lenient about which markdown
-  // extensions we accept.
-  if (!/\.(md|markdown)$/i.test(name)) name = name + '.md';
+
+  // Resolve the target extension + initial bytes from the requested kind.
+  let payload, encoding;
+  if (kind === 'xlsx') {
+    if (!/\.xlsx$/i.test(name)) name = name + '.xlsx';
+    payload = emptyXlsx(); encoding = null;
+  } else if (kind === 'docx') {
+    if (!/\.docx$/i.test(name)) name = name + '.docx';
+    payload = emptyDocx(); encoding = null;
+  } else {
+    // Markdown (default). Auto-append .md if no markdown extension supplied.
+    if (!/\.(md|markdown)$/i.test(name)) name = name + '.md';
+    // Start blank — seeding a "# Title" heading duplicated the title in the
+    // viewer, which already derives its own title header from the filename (#55).
+    payload = (body && typeof body.content === 'string') ? body.content : '';
+    encoding = 'utf8';
+  }
   const v = validateRenameName(name);
   if (v) return sendJson(res, 400, { error: v });
 
@@ -984,19 +1103,11 @@ async function handleTouch(res, body) {
   if (!safeInside(r.root.path, destFp)) return sendJson(res, 400, { error: 'destination escapes workspace' });
   if (fs.existsSync(destFp)) return sendJson(res, 409, { error: 'a file with that name already exists' });
 
-  // Default content: a minimal heading derived from the filename stem so the
-  // new file isn't a blank slate. Caller can override via body.content.
-  let content = (body && typeof body.content === 'string') ? body.content : '';
-  if (!content) {
-    const stem = name.replace(/\.(md|markdown)$/i, '').replace(/[-_]+/g, ' ').trim();
-    const title = stem.replace(/\b\w/g, (c) => c.toUpperCase()) || 'Untitled';
-    content = `# ${title}\n\n`;
-  }
   try {
     // Atomic create: write to .clawdoc-tmp-* then rename. Matches the editor's
     // save path so chokidar's ignore filter still catches the temp.
     const tmp = destFp + '.clawdoc-tmp-' + process.pid + '-' + Date.now();
-    fs.writeFileSync(tmp, content, { encoding: 'utf8', flag: 'wx' });
+    fs.writeFileSync(tmp, payload, encoding ? { encoding, flag: 'wx' } : { flag: 'wx' });
     fs.renameSync(tmp, destFp);
     const rel = path.relative(r.root.path, destFp).split(path.sep).join('/');
     return sendJson(res, 200, { ok: true, path: r.root.name + '/' + rel });
