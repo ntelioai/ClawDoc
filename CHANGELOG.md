@@ -6,6 +6,18 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [0.3.0] — 2026-06-10
+
+### Added
+- Split view (#50): display two tabs side by side with a draggable divider to control the split.
+- Full-fidelity `.xlsx` rendering and editing — preserves cell formatting (fonts, fills, borders, number formats, merged cells); the spreadsheet editor bars are merged into the top toolbar.
+- Folder-tree and settings UX batch: blank new-file creation plus `.xlsx`/`.docx` office templates from the folder context menu, and refreshed settings layout.
+
+### Changed
+- Folder behaviour (context menus, progressive collapse, `+`/new menu) now applies consistently in the two-pane (double-folder) view as well as the single-pane tree (#53).
+
+## [0.2.0] — 2026-06-03
+
 ### Added
 - Open-source launch scaffolding: `LICENSE` (AGPL-3.0-only), `CONTRIBUTING.md`, `SECURITY.md`, `CODE_OF_CONDUCT.md`, `.github/` issue + PR templates, and a tag-triggered cross-platform build workflow.
 - Full-text search (#29): in-browser [MiniSearch](https://github.com/lucaong/minisearch) index with stemming, typo tolerance, prefix matching and BM25 ranking, replacing the brute-force substring scan. The whole document body is now indexed (the previous 4 KB cap is gone), and PDF text is extracted at index time via `pdftotext` (poppler) when available. Full bodies are served separately from the doc list (`search.json` / `/api/search`) and the index is built lazily so first paint stays fast.
