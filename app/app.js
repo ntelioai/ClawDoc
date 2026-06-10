@@ -1077,6 +1077,27 @@
   window.addEventListener('popstate', applyHash);
   window.addEventListener('hashchange', applyHash);
 
+  // ---------- editor action slot (surfaced in the topbar) ----------
+  // An open editor (markdown / spreadsheet / docx) registers its Save/Close,
+  // status text, view controls and an info note here instead of rendering its
+  // own second toolbar. renderBreadcrumb() hosts these element references in the
+  // crumb-actions row, so the top toolbar gains the editor's buttons while it's
+  // open. The editor owns the elements (their dirty/disabled/text state lives on
+  // the nodes), so re-rendering the breadcrumb just re-homes the same nodes.
+  // Shape: { kind, note?, statusEl?, controls?: [el], actions?: [el] }
+  state.editorBar = null;
+  function setEditorBar(bar) {
+    state.editorBar = bar;
+    document.body.classList.toggle('has-editor', !!bar);
+    renderBreadcrumb();
+  }
+  function clearEditorBar() {
+    if (!state.editorBar) return;
+    state.editorBar = null;
+    document.body.classList.remove('has-editor');
+    renderBreadcrumb();
+  }
+
   // ---------- breadcrumb ----------
   function renderBreadcrumb() {
     const bc = $('#breadcrumb');
@@ -1158,11 +1179,26 @@
         histBtn.addEventListener('click', () => gh.openHistory(state.currentDoc));
         actions.appendChild(histBtn);
       }
-      if (isMd) {
+      // Hide "Edit" while the WYSIWYG editor is already open — its Save/Close
+      // take over in the editor cluster.
+      if (isMd && !state.editorBar) {
         const edit = el('button', { class: 'btn-accent', title: 'Edit in WYSIWYG editor' }, 'Edit');
         edit.addEventListener('click', () => startEditing(state.currentDoc));
         actions.appendChild(edit);
       }
+    }
+    // Editor action cluster — Save/Close/status/view-controls for the active
+    // editor, merged into this toolbar instead of a separate bar (the info note
+    // becomes a hover tooltip on the ⓘ button). Rendered independently of
+    // currentDoc so an open editor's Save can never be orphaned.
+    if (state.editorBar) {
+      const eb = state.editorBar;
+      const cluster = el('div', { class: 'editor-actions' });
+      if (eb.note) cluster.appendChild(el('button', { class: 'editor-info', title: eb.note, 'aria-label': 'About this editor' }, 'ⓘ'));
+      (eb.controls || []).forEach(c => cluster.appendChild(c));
+      if (eb.statusEl) cluster.appendChild(eb.statusEl);
+      (eb.actions || []).forEach(a => cluster.appendChild(a));
+      actions.appendChild(cluster);
     }
     bc.appendChild(actions);
     // Keep the topbar git pill in sync with the active workspace.
@@ -1314,21 +1350,36 @@
 
   // ---------- spreadsheet view (Univer, editable) ----------
   // Univer's UMD bundle is ~10 MB, so it loads lazily the first time a
-  // spreadsheet is opened — not on every app start. SheetJS parses both .csv
-  // and .xlsx into rows on the client (Univer's own xlsx import needs a
-  // conversion server), which we feed into a Univer workbook; on save we read
-  // the grid back out via the Facade API and re-serialize with SheetJS
-  // (sheet_to_csv for .csv, XLSX.write for .xlsx). Round-trip scope (#24):
-  // cell values and sheet structure are preserved; formulas, number formats,
-  // styles and merged cells are NOT (they're dropped to their evaluated
-  // values). xlsx diffs as a binary blob in git.
+  // spreadsheet is opened — not on every app start.
+  //
+  // Parse (load): SheetJS reads values + formulas (it handles dates/types
+  // cleanly). For .xlsx we ALSO parse with ExcelJS to read per-cell styles and
+  // merges, so the grid RENDERS the original formatting (fonts, fills, borders,
+  // number formats) — the two parsers read the same bytes, aligned by absolute
+  // cell address. The bridged style lives inline in Univer's cellData.
+  //
+  // Save (supersedes the value-only scope of #24): .csv round-trips as plain
+  // values via SheetJS. .xlsx is saved by PATCHING the user's edits onto the
+  // ORIGINAL workbook with ExcelJS — we re-read the original bytes, pull the
+  // live grid via getSnapshot(), diff values/formulas/styles/merges against a
+  // load-time snapshot, and rewrite only what changed. Every untouched cell
+  // keeps its formula, number format, font/fill/border; the sheet keeps its
+  // charts/validation; and formatting the user changes in-app is mapped back.
+  // SheetJS stays for parsing/CSV because its community build can't WRITE
+  // styles; ExcelJS can. xlsx diffs as a binary blob in git.
   let _univerCoreLoad = null;  // promise: react/rxjs/univer presets + locale + css
-  let _sheetJsLoad = null;     // promise: SheetJS (xlsx) parser
+  let _sheetJsLoad = null;     // promise: SheetJS (xlsx) parser — load-side only
+  let _excelJsLoad = null;     // promise: ExcelJS — save-side full-fidelity writer
   let _activeUniver = null;    // { univer, univerAPI } for the mounted sheet
   let _sheetDoc = null;        // doc currently mounted in the grid
   let _sheetDirty = false;     // has the user edited cells since load/save?
   let _sheetReady = false;     // grid finished loading (ignore load-time mutations)
   let _sheetSaveFn = null;     // bound save handler for ⌘S
+  // Per-sheet snapshot of exactly what we fed Univer at load: { name, originRow,
+  // originCol, values[][], formulas[][] }. The save path diffs the live grid
+  // against this to find user-edited cells, so only those are rewritten and
+  // every untouched cell keeps its original styling/formula/format/merge.
+  let _sheetSnapshot = null;
 
   function loadScriptOnce(src) {
     return new Promise((resolve, reject) => {
@@ -1364,11 +1415,23 @@
     return _sheetJsLoad;
   }
 
+  // ExcelJS (window.ExcelJS) is the save-side writer. Unlike the bundled
+  // SheetJS community build, it round-trips fonts, fills, colors, borders,
+  // number formats, merges, charts, data validation and conditional formatting,
+  // so a save can patch only the cells the user changed and leave everything
+  // else byte-faithful. Lazy — only fetched the first time a sheet is saved.
+  function loadExcelJs() {
+    if (!_excelJsLoad) _excelJsLoad = loadScriptOnce('/app/vendor/exceljs/exceljs.min.js');
+    return _excelJsLoad;
+  }
+
   function disposeSpreadsheet() {
     _sheetDoc = null;
     _sheetDirty = false;
     _sheetReady = false;
     _sheetSaveFn = null;
+    _sheetSnapshot = null;
+    if (state.editorBar && state.editorBar.kind === 'sheet') clearEditorBar();
     if (!_activeUniver) return;
     try { _activeUniver.univer.dispose(); } catch {}
     _activeUniver = null;
@@ -1376,82 +1439,358 @@
 
   function isSheetDirty() { return !!(_activeUniver && _sheetDirty); }
 
-  // Pull the live grid back out of Univer as { name, rows[][] } per sheet,
-  // trimming trailing all-empty rows/columns so serialization stays clean.
-  function readUniverSheets() {
-    const wb = _activeUniver.univerAPI.getActiveWorkbook();
-    const out = [];
-    for (const ws of wb.getSheets()) {
-      let rows = ws.getDataRange().getValues();
-      // Normalize null/undefined to '' and stringify nothing (SheetJS handles
-      // numbers/strings/booleans natively).
-      rows = rows.map(row => row.map(v => (v === null || v === undefined ? '' : v)));
-      // Drop trailing empty rows.
-      while (rows.length && rows[rows.length - 1].every(v => v === '')) rows.pop();
-      // Drop trailing empty columns.
-      let lastCol = 0;
-      for (const row of rows) {
-        for (let c = row.length - 1; c >= 0; c--) {
-          if (row[c] !== '') { if (c + 1 > lastCol) lastCol = c + 1; break; }
-        }
-      }
-      rows = rows.map(row => row.slice(0, lastCol));
-      out.push({ name: ws.getSheetName(), rows });
-    }
-    return out;
+  // A formula string, normalized for comparison/storage: no leading '=', no
+  // surrounding whitespace, '' / null collapsed to null. Univer hands formulas
+  // back with a leading '='; ExcelJS wants them without.
+  function normFormula(f) {
+    if (f === null || f === undefined || f === '') return null;
+    const s = String(f).replace(/^=/, '').trim();
+    return s === '' ? null : s;
+  }
+  function valEq(a, b) {
+    const na = (a === null || a === undefined) ? '' : a;
+    const nb = (b === null || b === undefined) ? '' : b;
+    return na === nb;
   }
 
-  // rows (array-of-arrays from SheetJS) -> Univer cellData { r: { c: { v } } }
-  function rowsToCellData(rows) {
+  // ---------- style bridge: ExcelJS <-> Univer IStyleData ----------
+  // The enum integers (HorizontalAlign etc.) are read off the live Univer
+  // global at runtime, so we never hardcode values that could drift between
+  // bundle versions. Falls back to the documented @univerjs/core constants if
+  // the namespace shape ever changes.
+  function univerEnums() {
+    const C = window.UniverCore || window.UniverPresets || {};
+    return {
+      HorizontalAlign: C.HorizontalAlign || { UNSPECIFIED: 0, LEFT: 1, CENTER: 2, RIGHT: 3 },
+      VerticalAlign: C.VerticalAlign || { UNSPECIFIED: 0, TOP: 1, MIDDLE: 2, BOTTOM: 3 },
+      WrapStrategy: C.WrapStrategy || { UNSPECIFIED: 0, CLIP: 1, OVERFLOW: 2, WRAP: 3 },
+      BooleanNumber: C.BooleanNumber || { FALSE: 0, TRUE: 1 },
+      BorderStyleTypes: C.BorderStyleTypes || {
+        NONE: 0, THIN: 1, HAIR: 2, DOTTED: 3, DASHED: 4, DASH_DOT: 5, DASH_DOT_DOT: 6,
+        DOUBLE: 7, MEDIUM: 8, MEDIUM_DASHED: 9, MEDIUM_DASH_DOT: 10, MEDIUM_DASH_DOT_DOT: 11,
+        SLANT_DASH_DOT: 12, THICK: 13,
+      },
+    };
+  }
+  // ExcelJS uses ARGB hex 'FFRRGGBB'; Univer uses CSS '#RRGGBB' / 'rgb(...)'.
+  function argbToHex(argb) {
+    if (!argb || typeof argb !== 'string') return null;
+    return '#' + (argb.length === 8 ? argb.slice(2) : argb).toUpperCase();
+  }
+  function hexToArgb(c) {
+    if (!c || typeof c !== 'string') return null;
+    let s = c.trim();
+    const m = s.match(/^rgba?\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)/i);
+    if (m) { const h = n => Number(n).toString(16).padStart(2, '0'); return ('FF' + h(m[1]) + h(m[2]) + h(m[3])).toUpperCase(); }
+    s = s.replace(/^#/, '');
+    if (s.length === 3) s = s.split('').map(ch => ch + ch).join('');
+    if (s.length === 6) return ('FF' + s).toUpperCase();
+    if (s.length === 8) return s.toUpperCase();
+    return null;
+  }
+  function borderMaps(E) {
+    const B = E.BorderStyleTypes;
+    const toUniver = {
+      thin: B.THIN, medium: B.MEDIUM, thick: B.THICK, dotted: B.DOTTED, dashed: B.DASHED,
+      double: B.DOUBLE, hair: B.HAIR, dashDot: B.DASH_DOT, dashDotDot: B.DASH_DOT_DOT,
+      mediumDashed: B.MEDIUM_DASHED, mediumDashDot: B.MEDIUM_DASH_DOT,
+      mediumDashDotDot: B.MEDIUM_DASH_DOT_DOT, slantDashDot: B.SLANT_DASH_DOT,
+    };
+    const toExcel = {};
+    Object.keys(toUniver).forEach(k => { if (toUniver[k] !== undefined) toExcel[toUniver[k]] = k; });
+    return { toUniver, toExcel };
+  }
+  // ExcelJS cell -> Univer IStyleData (load). null when nothing we map is set.
+  function excelStyleToUniver(cell, E) {
+    const st = {};
+    const font = cell.font || {}, fill = cell.fill || {}, align = cell.alignment || {};
+    const HA = E.HorizontalAlign, VA = E.VerticalAlign, WS = E.WrapStrategy, BN = E.BooleanNumber;
+    if (font.bold) st.bl = BN.TRUE;
+    if (font.italic) st.it = BN.TRUE;
+    if (font.underline) st.ul = { s: BN.TRUE };
+    if (font.strike) st.st = { s: BN.TRUE };
+    if (typeof font.size === 'number') st.fs = font.size;
+    if (font.name) st.ff = font.name;
+    if (font.color && font.color.argb) { const h = argbToHex(font.color.argb); if (h) st.cl = { rgb: h }; }
+    if (fill.type === 'pattern' && fill.pattern === 'solid' && fill.fgColor && fill.fgColor.argb) {
+      const h = argbToHex(fill.fgColor.argb); if (h) st.bg = { rgb: h };
+    }
+    if (align.horizontal === 'left') st.ht = HA.LEFT;
+    else if (align.horizontal === 'center') st.ht = HA.CENTER;
+    else if (align.horizontal === 'right') st.ht = HA.RIGHT;
+    if (align.vertical === 'top') st.vt = VA.TOP;
+    else if (align.vertical === 'middle') st.vt = VA.MIDDLE;
+    else if (align.vertical === 'bottom') st.vt = VA.BOTTOM;
+    if (align.wrapText) st.tb = WS.WRAP;
+    if (cell.numFmt && cell.numFmt !== 'General') st.n = { pattern: cell.numFmt };
+    const { toUniver } = borderMaps(E);
+    const sides = { t: 'top', b: 'bottom', l: 'left', r: 'right' };
+    const bd = {};
+    Object.keys(sides).forEach(k => {
+      const side = (cell.border || {})[sides[k]];
+      if (side && side.style && toUniver[side.style] !== undefined) {
+        const o = { s: toUniver[side.style] };
+        if (side.color && side.color.argb) { const h = argbToHex(side.color.argb); if (h) o.cl = { rgb: h }; }
+        bd[k] = o;
+      }
+    });
+    if (Object.keys(bd).length) st.bd = bd;
+    return Object.keys(st).length ? st : null;
+  }
+  // Univer IStyleData -> partial ExcelJS style patch (save). Merged onto the
+  // original cell so unmapped attributes (gradients, themes, rich text) survive.
+  function univerStyleToExcel(st, E) {
+    if (!st) return null;
+    const BN = E.BooleanNumber, HA = E.HorizontalAlign, VA = E.VerticalAlign, WS = E.WrapStrategy;
+    const out = {}, font = {};
+    if (st.bl === BN.TRUE) font.bold = true;
+    if (st.it === BN.TRUE) font.italic = true;
+    if (st.ul && st.ul.s === BN.TRUE) font.underline = true;
+    if (st.st && st.st.s === BN.TRUE) font.strike = true;
+    if (typeof st.fs === 'number') font.size = st.fs;
+    if (st.ff) font.name = st.ff;
+    if (st.cl && st.cl.rgb) { const a = hexToArgb(st.cl.rgb); if (a) font.color = { argb: a }; }
+    if (Object.keys(font).length) out.font = font;
+    if (st.bg && st.bg.rgb) { const a = hexToArgb(st.bg.rgb); if (a) out.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: a } }; }
+    const alignment = {};
+    if (st.ht === HA.LEFT) alignment.horizontal = 'left';
+    else if (st.ht === HA.CENTER) alignment.horizontal = 'center';
+    else if (st.ht === HA.RIGHT) alignment.horizontal = 'right';
+    if (st.vt === VA.TOP) alignment.vertical = 'top';
+    else if (st.vt === VA.MIDDLE) alignment.vertical = 'middle';
+    else if (st.vt === VA.BOTTOM) alignment.vertical = 'bottom';
+    if (st.tb === WS.WRAP) alignment.wrapText = true;
+    if (Object.keys(alignment).length) out.alignment = alignment;
+    if (st.n && st.n.pattern) out.numFmt = st.n.pattern;
+    if (st.bd) {
+      const { toExcel } = borderMaps(E);
+      const sides = { t: 'top', b: 'bottom', l: 'left', r: 'right' };
+      const border = {};
+      Object.keys(sides).forEach(k => {
+        const o = st.bd[k];
+        if (o && o.s !== undefined && toExcel[o.s]) {
+          const side = { style: toExcel[o.s] };
+          if (o.cl && o.cl.rgb) { const a = hexToArgb(o.cl.rgb); if (a) side.color = { argb: a }; }
+          border[sides[k]] = side;
+        }
+      });
+      if (Object.keys(border).length) out.border = border;
+    }
+    return Object.keys(out).length ? out : null;
+  }
+  // Two styles are "the same" when they project to the same Excel patch — this
+  // ignores Univer's internal key reordering / default-filling so an untouched
+  // cell isn't flagged as restyled on save.
+  function sameStyle(a, b, E) {
+    return JSON.stringify(univerStyleToExcel(a, E)) === JSON.stringify(univerStyleToExcel(b, E));
+  }
+  // Apply an Excel style patch onto a cell, merging so unmapped props survive.
+  function applyExcelStylePatch(cell, patch) {
+    if (!patch) return;
+    if (patch.font) cell.font = Object.assign({}, cell.font, patch.font);
+    if (patch.fill) cell.fill = patch.fill;
+    if (patch.alignment) cell.alignment = Object.assign({}, cell.alignment, patch.alignment);
+    if (patch.numFmt) cell.numFmt = patch.numFmt;
+    if (patch.border) cell.border = Object.assign({}, cell.border, patch.border);
+  }
+
+  // ExcelJS worksheet merges as 1-based {top,left,bottom,right} rectangles.
+  function excelMerges(exWs, XLSX) {
+    const refs = (exWs && exWs.model && exWs.model.merges) || [];
+    return refs.map(ref => {
+      const r = XLSX.utils.decode_range(ref);
+      return { top: r.s.r + 1, left: r.s.c + 1, bottom: r.e.r + 1, right: r.e.c + 1 };
+    });
+  }
+
+  // values+formulas+styles (absolute, origin at the sheet's used-range top-left)
+  // -> Univer cellData { r: { c: { v, f, s } } }. Formulas carry a leading '='
+  // so the grid recalculates them; styles carry inline so the grid RENDERS the
+  // original formatting (Fix B) and a later save can diff style edits.
+  function gridToCellData(values, formulas, styles) {
     const cellData = {};
     let maxCols = 1;
-    rows.forEach((row, r) => {
+    values.forEach((row, r) => {
       cellData[r] = {};
+      const fRow = (formulas && formulas[r]) || [];
+      const sRow = (styles && styles[r]) || [];
       row.forEach((v, c) => {
-        if (v !== null && v !== undefined && v !== '') cellData[r][c] = { v };
+        const f = normFormula(fRow[c]);
+        const s = sRow[c] || null;
+        let cell = null;
+        if (f) cell = { f: '=' + f, v: (v === '' ? null : v) };
+        else if (v !== null && v !== undefined && v !== '') cell = { v };
+        if (s) { if (!cell) cell = {}; cell.s = s; }
+        if (cell) cellData[r][c] = cell;
       });
       if (row.length > maxCols) maxCols = row.length;
     });
     return {
       cellData,
-      rowCount: Math.max(rows.length + 20, 50),
+      rowCount: Math.max(values.length + 20, 50),
       columnCount: Math.max(maxCols + 5, 26),
     };
   }
 
+  // Read one SheetJS worksheet into absolute-coordinate values+formulas grids,
+  // anchored at the used range's top-left. originRow/originCol record that
+  // anchor so the save path can map Univer's A1-relative grid back onto the
+  // original workbook's true cell addresses.
+  function sheetToGrid(ws, XLSX) {
+    const ref = ws['!ref'];
+    if (!ref) return { values: [], formulas: [], originRow: 0, originCol: 0 };
+    const range = XLSX.utils.decode_range(ref);
+    const originRow = range.s.r, originCol = range.s.c;
+    const values = [], formulas = [];
+    for (let r = range.s.r; r <= range.e.r; r++) {
+      const vRow = [], fRow = [];
+      for (let c = range.s.c; c <= range.e.c; c++) {
+        const cell = ws[XLSX.utils.encode_cell({ r, c })];
+        if (!cell) { vRow.push(''); fRow.push(null); continue; }
+        vRow.push(cell.v === undefined || cell.v === null ? '' : cell.v);
+        fRow.push(cell.f ? normFormula(cell.f) : null);
+      }
+      values.push(vRow); formulas.push(fRow);
+    }
+    return { values, formulas, originRow, originCol };
+  }
+
+  // Pull the whole live workbook back out of Univer via getSnapshot(): one
+  // consistent absolute-coordinate source for values, formulas, styles and
+  // merges, per sheet, in sheetOrder. Trailing all-empty rows are trimmed.
+  function univerSnapshotToGrids() {
+    const api = _activeUniver.univerAPI.getActiveWorkbook();
+    const snap = (typeof api.getSnapshot === 'function' ? api.getSnapshot()
+               : typeof api.save === 'function' ? api.save() : {}) || {};
+    const stylesReg = snap.styles || {};
+    const sheetsMap = snap.sheets || {};
+    const order = (snap.sheetOrder && snap.sheetOrder.length) ? snap.sheetOrder : Object.keys(sheetsMap);
+    const resolveStyle = (sref) =>
+      (typeof sref === 'string') ? (stylesReg[sref] || null)
+        : (sref && typeof sref === 'object') ? sref : null;
+    return order.map((id, idx) => {
+      const sd = sheetsMap[id] || {};
+      const cd = sd.cellData || {};
+      let maxR = -1, maxC = -1;
+      Object.keys(cd).forEach(rk => {
+        const row = cd[rk] || {};
+        Object.keys(row).forEach(ck => {
+          const cell = row[ck];
+          const has = cell && ((cell.v !== undefined && cell.v !== null && cell.v !== '') || cell.f || cell.s);
+          if (has) { maxR = Math.max(maxR, +rk); maxC = Math.max(maxC, +ck); }
+        });
+      });
+      const values = [], formulas = [], styles = [];
+      for (let r = 0; r <= maxR; r++) {
+        const vRow = [], fRow = [], sRow = [];
+        const row = cd[r] || {};
+        for (let c = 0; c <= maxC; c++) {
+          const cell = row[c];
+          if (!cell) { vRow.push(''); fRow.push(null); sRow.push(null); continue; }
+          vRow.push(cell.v === undefined || cell.v === null ? '' : cell.v);
+          fRow.push(cell.f ? normFormula(cell.f) : null);
+          sRow.push(resolveStyle(cell.s));
+        }
+        values.push(vRow); formulas.push(fRow); styles.push(sRow);
+      }
+      const rowEmpty = (i) =>
+        values[i].every(v => v === '') && formulas[i].every(f => f === null) && styles[i].every(s => s === null);
+      while (values.length && rowEmpty(values.length - 1)) { values.pop(); formulas.pop(); styles.pop(); }
+      const merges = (sd.mergeData || []).map(m => ({
+        sr: m.startRow, sc: m.startColumn, er: m.endRow, ec: m.endColumn,
+      }));
+      return { name: sd.name || ('Sheet' + (idx + 1)), values, formulas, styles, merges };
+    });
+  }
+
+  // Patch only user-edited cells onto an ExcelJS workbook loaded from the
+  // original bytes, leaving every untouched cell — and all its styling, number
+  // format, formula and the sheet's charts/validation — exactly as it was.
+  // grids come from univerSnapshotToGrids() (absolute Univer coords); snapshot
+  // is what we fed Univer at load (_sheetSnapshot). A cell is rewritten when its
+  // formula, value, OR mapped style changed; merges are diffed separately.
+  function patchExcelWorkbook(wb, grids, snapshot) {
+    const E = univerEnums();
+    grids.forEach((cur, i) => {
+      const snap = (snapshot && snapshot[i]) || { originRow: 0, originCol: 0, values: [], formulas: [], styles: [], merges: [] };
+      let ws = wb.worksheets[i];
+      if (!ws) ws = wb.addWorksheet(cur.name || ('Sheet' + (i + 1)));
+      if (cur.name && ws.name !== cur.name) { try { ws.name = cur.name; } catch {} }
+      const oR = snap.originRow || 0, oC = snap.originCol || 0;
+      const maxR = Math.max(snap.values.length, cur.values.length);
+      for (let R = 0; R < maxR; R++) {
+        const curRow = cur.values[R] || [], curFRow = cur.formulas[R] || [], curSRow = cur.styles[R] || [];
+        const snapRow = snap.values[R] || [], snapFRow = snap.formulas[R] || [], snapSRow = (snap.styles && snap.styles[R]) || [];
+        const width = Math.max(curRow.length, snapRow.length);
+        for (let C = 0; C < width; C++) {
+          const cv = curRow[C], cf = normFormula(curFRow[C]);
+          const sv = snapRow[C], sf = normFormula(snapFRow[C]);
+          const contentChanged = (cf || sf) ? (cf !== sf) : !valEq(cv, sv);
+          const styleChanged = !sameStyle(curSRow[C] || null, snapSRow[C] || null, E);
+          if (!contentChanged && !styleChanged) continue;
+          const cell = ws.getCell(R + oR + 1, C + oC + 1); // ExcelJS is 1-indexed
+          if (contentChanged) {
+            if (cf) cell.value = { formula: cf, result: (cv === '' || cv === null || cv === undefined ? null : cv) };
+            else cell.value = (cv === '' || cv === null || cv === undefined) ? null : cv;
+          }
+          // Apply the cell's current style when it changed. A cleared style
+          // (cur null) leaves the original ExcelJS style in place — we add and
+          // change formatting, but don't strip it.
+          if (styleChanged) applyExcelStylePatch(cell, univerStyleToExcel(curSRow[C] || null, E));
+        }
+      }
+      // Merge diff: add merges new since load, drop ones removed since load.
+      const key = m => m.sr + ',' + m.sc + ',' + m.er + ',' + m.ec;
+      const curSet = new Set((cur.merges || []).map(key));
+      const snapSet = new Set((snap.merges || []).map(key));
+      (cur.merges || []).forEach(m => {
+        if (!snapSet.has(key(m))) {
+          try { ws.mergeCells(m.sr + oR + 1, m.sc + oC + 1, m.er + oR + 1, m.ec + oC + 1); } catch {}
+        }
+      });
+      (snap.merges || []).forEach(m => {
+        if (!curSet.has(key(m))) {
+          try { ws.unMergeCells(m.sr + oR + 1, m.sc + oC + 1, m.er + oR + 1, m.ec + oC + 1); } catch {}
+        }
+      });
+    });
+    // Drop trailing sheets the user deleted in Univer.
+    while (wb.worksheets.length > grids.length) {
+      const last = wb.worksheets[wb.worksheets.length - 1];
+      wb.removeWorksheet(last.id);
+    }
+    return wb;
+  }
+
   async function renderSpreadsheet(doc, viewer, bust) {
     const wrap = el('div', { class: 'sheet-frame-wrap' });
-    // Editable since #24 phase 2/3: a save bar (status + Save ⌘S) sits above
-    // the grid. .csv round-trips as text, .xlsx as a binary workbook.
+    // Editable since #24 phase 2/3. The Save ⌘S button + status live in the top
+    // toolbar (the editor cluster), not a separate bar above the grid.
     const isCsv = doc.ext === 'csv';
-    const bar = el('div', { class: 'sheet-bar' });
-    // Save-surface note (#42): be explicit about what survives a save so the
-    // Formula/Numfmt UI Univer shows doesn't become a silent data-loss trap.
-    // The save path serializes evaluated cell values + sheet structure only.
-    bar.appendChild(el('span', { class: 'sheet-note' },
-      isCsv ? 'Editable spreadsheet — saves back as CSV: one sheet, cell values only. Extra tabs, formulas, number formats and styles are not saved.'
-            : 'Editable spreadsheet — saves back as XLSX. Cell values + sheet structure are preserved; formulas, number formats, styles and merges save as their evaluated values.'));
-    const status = el('span', { class: 'sheet-status' });
-    const saveBtn = el('button', { class: 'sheet-save', disabled: 'true' }, 'Save  ⌘S');
-    bar.appendChild(status);
-    bar.appendChild(saveBtn);
+    // Save-surface note (#42): be explicit about what survives a save. Surfaced
+    // as the ⓘ tooltip in the editor cluster.
+    const note = isCsv
+      ? 'Editable spreadsheet — saves back as CSV: one sheet, cell values only. Extra tabs, formulas, number formats and styles are not saved.'
+      : 'Editable spreadsheet — full formatting. Edits are patched onto the original file, so formulas, number formats, fonts, colors, borders and merges are preserved, and formatting you change here is saved too.';
+    const status = el('span', { class: 'editor-status' });
+    const saveBtn = el('button', { class: 'editor-act primary', disabled: 'true' }, 'Save  ⌘S');
     const host = el('div', { class: 'sheet-host' });
-    wrap.appendChild(bar);
     wrap.appendChild(host);
     viewer.appendChild(wrap);
+    setEditorBar({ kind: 'sheet', note, statusEl: status, actions: [saveBtn] });
 
     const markDirty = () => {
       if (!_sheetReady || _sheetDirty) return;
       _sheetDirty = true;
       saveBtn.disabled = false;
       status.textContent = '● Unsaved changes';
-      status.className = 'sheet-status dirty';
+      status.className = 'editor-status dirty';
     };
 
     const doSave = async () => {
       if (!_activeUniver || !_sheetDirty) return;
       const XLSX = window.XLSX;
-      const sheets = readUniverSheets();
+      const sheets = univerSnapshotToGrids();
       // CSV is single-sheet by nature; extra tabs the user added via Univer's
       // built-in sheet bar would be silently dropped on save. Make it explicit
       // rather than silent (#42).
@@ -1464,27 +1803,41 @@
         if (!ok) return;
       }
       status.textContent = 'Saving…';
-      status.className = 'sheet-status';
+      status.className = 'editor-status';
       saveBtn.disabled = true;
       try {
-        const outWb = XLSX.utils.book_new();
-        sheets.forEach((s, i) => {
-          const ws = XLSX.utils.aoa_to_sheet(s.rows.length ? s.rows : [[]]);
-          // Sheet names: max 31 chars, no []:*?/\ — fall back to Sheet{n}.
-          const safe = (s.name || ('Sheet' + (i + 1))).replace(/[[\]:*?/\\]/g, ' ').slice(0, 31) || ('Sheet' + (i + 1));
-          XLSX.utils.book_append_sheet(outWb, ws, safe);
-        });
         let body, contentType;
         if (isCsv) {
-          // CSV is single-sheet by nature — serialize the first sheet only.
-          // RFC-4180 quoting (SheetJS quotes fields with , " or newline),
-          // comma delimiter, \n line endings, no forced trailing newline.
-          const firstName = outWb.SheetNames[0];
-          body = XLSX.utils.sheet_to_csv(outWb.Sheets[firstName], { forceQuotes: false });
+          // CSV is single-sheet, value-only by nature — serialize the first
+          // sheet's values. RFC-4180 quoting (SheetJS quotes fields with , " or
+          // newline), comma delimiter, \n line endings, no forced trailing nl.
+          const rows = sheets[0].values.length ? sheets[0].values : [[]];
+          const ws = XLSX.utils.aoa_to_sheet(rows);
+          body = XLSX.utils.sheet_to_csv(ws, { forceQuotes: false });
           contentType = 'text/csv; charset=utf-8';
         } else {
-          const u8 = XLSX.write(outWb, { bookType: 'xlsx', type: 'array' });
-          body = new Blob([u8], { type: 'application/octet-stream' });
+          // XLSX: patch the user's edits onto the ORIGINAL workbook so styling,
+          // number formats, untouched formulas, merges, charts and validation
+          // survive byte-faithful. ExcelJS (not the bundled SheetJS, which can't
+          // write styles) is the writer. Re-read the original bytes from disk so
+          // the patch lands on a full-fidelity model.
+          await loadExcelJs();
+          const ExcelJS = window.ExcelJS;
+          let wbx;
+          try {
+            const r0 = await fetch('/file?path=' + encodeURIComponent(doc.path), { cache: 'no-store' });
+            if (!r0.ok) throw new Error('HTTP ' + r0.status);
+            wbx = new ExcelJS.Workbook();
+            await wbx.xlsx.load(await r0.arrayBuffer());
+          } catch {
+            // No readable original (e.g. a freshly-created blank file): start
+            // empty. With an empty snapshot every current cell reads as new, so
+            // patchExcelWorkbook writes the whole grid fresh.
+            wbx = new ExcelJS.Workbook();
+          }
+          patchExcelWorkbook(wbx, sheets, _sheetSnapshot);
+          const out = await wbx.xlsx.writeBuffer();
+          body = new Blob([out], { type: 'application/octet-stream' });
           contentType = 'application/octet-stream';
         }
         const resp = await fetch('/api/save?path=' + encodeURIComponent(doc.path), {
@@ -1496,13 +1849,13 @@
         if (!resp.ok || !data.ok) throw new Error(data.error || ('HTTP ' + resp.status));
         _sheetDirty = false;
         status.textContent = 'Saved ✓';
-        status.className = 'sheet-status ok';
+        status.className = 'editor-status ok';
         const idx = state.docs.find(d => d.path === doc.path);
         if (idx) { idx.size = data.size; idx.mtime = data.mtime; }
         setTimeout(() => { if (status.textContent === 'Saved ✓') status.textContent = ''; }, 1500);
       } catch (err) {
         status.textContent = 'Error: ' + err.message;
-        status.className = 'sheet-status error';
+        status.className = 'editor-status error';
         saveBtn.disabled = false;
       }
     };
@@ -1515,23 +1868,56 @@
       const fileUrl = '/file?path=' + encodeURIComponent(doc.path) + (bust ? '&' + bust : '');
       const r = await fetch(fileUrl, { cache: 'no-store' });
       if (!r.ok) throw new Error('HTTP ' + r.status);
-      const wb = doc.ext === 'csv'
-        ? XLSX.read(await r.text(), { type: 'string' })
-        : XLSX.read(new Uint8Array(await r.arrayBuffer()), { type: 'array' });
+      // SheetJS parses values + formulas (it handles dates/types cleanly). For
+      // .xlsx we ALSO parse with ExcelJS to read per-cell styles + merges and
+      // render them in the grid (Fix B) — the two parsers read the same bytes,
+      // aligned by absolute cell address.
+      let buf = null, wb;
+      if (doc.ext === 'csv') {
+        wb = XLSX.read(await r.text(), { type: 'string' });
+      } else {
+        buf = await r.arrayBuffer();
+        wb = XLSX.read(new Uint8Array(buf), { type: 'array' });
+      }
+      let exWb = null;
+      if (doc.ext !== 'csv') {
+        try { await loadExcelJs(); exWb = new window.ExcelJS.Workbook(); await exWb.xlsx.load(buf); }
+        catch { exWb = null; } // styles are a bonus; never block the grid on them
+      }
+      const E = univerEnums();
 
       const sheets = {};
       const sheetOrder = [];
+      const snapshot = [];
       wb.SheetNames.forEach((nm, i) => {
         const id = 'sheet-' + i;
-        const aoa = XLSX.utils.sheet_to_json(wb.Sheets[nm], { header: 1, defval: '', raw: true });
-        const { cellData, rowCount, columnCount } = rowsToCellData(aoa);
-        sheets[id] = { id, name: nm || ('Sheet' + (i + 1)), cellData, rowCount, columnCount };
+        const grid = sheetToGrid(wb.Sheets[nm], XLSX);
+        // Per-cell styles (Univer IStyleData) + merges, aligned to grid coords.
+        const exWs = exWb ? exWb.worksheets[i] : null;
+        const styles = grid.values.map((row, rr) => row.map((_, cc) =>
+          exWs ? excelStyleToUniver(exWs.getCell(rr + grid.originRow + 1, cc + grid.originCol + 1), E) : null));
+        const merges = (exWs ? excelMerges(exWs, XLSX) : [])
+          .map(m => ({ sr: m.top - 1 - grid.originRow, sc: m.left - 1 - grid.originCol, er: m.bottom - 1 - grid.originRow, ec: m.right - 1 - grid.originCol }))
+          .filter(m => m.sr >= 0 && m.sc >= 0);
+        const { cellData, rowCount, columnCount } = gridToCellData(grid.values, grid.formulas, styles);
+        const mergeData = merges.map(m => ({ startRow: m.sr, startColumn: m.sc, endRow: m.er, endColumn: m.ec }));
+        sheets[id] = { id, name: nm || ('Sheet' + (i + 1)), cellData, rowCount, columnCount, mergeData };
         sheetOrder.push(id);
+        // Snapshot the exact grid we fed Univer so the save path can diff
+        // against it. originRow/originCol map this A1-relative grid back onto
+        // the original sheet's true addresses on save.
+        snapshot.push({
+          name: nm || ('Sheet' + (i + 1)),
+          originRow: grid.originRow, originCol: grid.originCol,
+          values: grid.values, formulas: grid.formulas, styles, merges,
+        });
       });
       if (!sheetOrder.length) {
         sheets['sheet-0'] = { id: 'sheet-0', name: 'Sheet1', cellData: {}, rowCount: 50, columnCount: 26 };
         sheetOrder.push('sheet-0');
+        snapshot.push({ name: 'Sheet1', originRow: 0, originCol: 0, values: [], formulas: [], styles: [], merges: [] });
       }
+      _sheetSnapshot = snapshot;
 
       const { createUniver } = window.UniverPresets;
       // LocaleType / mergeLocales live on the UniverCore namespace, not UniverPresets.
@@ -1605,6 +1991,7 @@
     _docxDirty = false;
     _docxReady = false;
     _docxSaveFn = null;
+    if (state.editorBar && state.editorBar.kind === 'docx') clearEditorBar();
     if (!_activeSuperdoc) return;
     try { _activeSuperdoc.destroy(); } catch {}
     _activeSuperdoc = null;
@@ -1614,41 +2001,34 @@
 
   async function renderDocx(doc, viewer, bust) {
     const wrap = el('div', { class: 'docx-frame-wrap' });
-    const bar = el('div', { class: 'docx-bar' });
-    bar.appendChild(el('span', { class: 'docx-note' },
-      'Editable Word document — saves back as DOCX. Text, styles, tables, images and headers/footers are preserved; exotic constructs may normalize.'));
+    const note = 'Editable Word document — saves back as DOCX. Text, styles, tables, images and headers/footers are preserved; exotic constructs may normalize.';
     // View controls surfaced from SuperDoc's API (#41): a read/edit mode
     // toggle (setDocumentMode) and a rulers toggle (toggleRuler). Pagination
-    // (page view) and rulers are enabled in the constructor below.
-    const viewCtl = el('div', { class: 'docx-viewctl' });
-    const modeBtn = el('button', { class: 'docx-ctl-btn', title: 'Toggle read-only / editing mode' }, 'Editing');
-    const rulerBtn = el('button', { class: 'docx-ctl-btn', title: 'Show/hide rulers' }, 'Rulers');
-    viewCtl.appendChild(modeBtn);
-    viewCtl.appendChild(rulerBtn);
-    const status = el('span', { class: 'docx-status' });
-    const saveBtn = el('button', { class: 'docx-save', disabled: 'true' }, 'Save  ⌘S');
-    bar.appendChild(viewCtl);
-    bar.appendChild(status);
-    bar.appendChild(saveBtn);
+    // (page view) and rulers are enabled in the constructor below. These now
+    // live in the top toolbar's editor cluster alongside Save.
+    const modeBtn = el('button', { class: 'editor-act', title: 'Toggle read-only / editing mode' }, 'Editing');
+    const rulerBtn = el('button', { class: 'editor-act', title: 'Show/hide rulers' }, 'Rulers');
+    const status = el('span', { class: 'editor-status' });
+    const saveBtn = el('button', { class: 'editor-act primary', disabled: 'true' }, 'Save  ⌘S');
     const toolbar = el('div', { class: 'docx-toolbar', id: 'docx-toolbar' });
     const host = el('div', { class: 'docx-host', id: 'docx-host' });
-    wrap.appendChild(bar);
     wrap.appendChild(toolbar);
     wrap.appendChild(host);
     viewer.appendChild(wrap);
+    setEditorBar({ kind: 'docx', note, statusEl: status, controls: [modeBtn, rulerBtn], actions: [saveBtn] });
 
     const markDirty = () => {
       if (!_docxReady || _docxDirty) return;
       _docxDirty = true;
       saveBtn.disabled = false;
       status.textContent = '● Unsaved changes';
-      status.className = 'docx-status dirty';
+      status.className = 'editor-status dirty';
     };
 
     const doSave = async () => {
       if (!_activeSuperdoc || !_docxDirty) return;
       status.textContent = 'Saving…';
-      status.className = 'docx-status';
+      status.className = 'editor-status';
       saveBtn.disabled = true;
       try {
         // Native client-side docx export → a single Blob (triggerDownload off
@@ -1663,13 +2043,13 @@
         if (!resp.ok || !data.ok) throw new Error(data.error || ('HTTP ' + resp.status));
         _docxDirty = false;
         status.textContent = 'Saved ✓';
-        status.className = 'docx-status ok';
+        status.className = 'editor-status ok';
         const idx = state.docs.find(d => d.path === doc.path);
         if (idx) { idx.size = data.size; idx.mtime = data.mtime; }
         setTimeout(() => { if (status.textContent === 'Saved ✓') status.textContent = ''; }, 1500);
       } catch (err) {
         status.textContent = 'Error: ' + err.message;
-        status.className = 'docx-status error';
+        status.className = 'editor-status error';
         saveBtn.disabled = false;
       }
     };
@@ -2980,6 +3360,7 @@
     state.editorDoc = null;
     state.editorOriginal = '';
     state.editorFrontMatter = '';
+    if (state.editorBar && state.editorBar.kind === 'md') clearEditorBar();
   }
 
   async function startEditing(doc) {
@@ -3004,19 +3385,16 @@
     viewer.innerHTML = '';
     const wrap = el('div', { class: 'doc-edit' });
 
-    const bar = el('div', { class: 'doc-edit-bar' });
-    bar.appendChild(el('div', { class: 'doc-edit-title' }, 'Editing  ·  ' + doc.path));
-    const status = el('span', { class: 'doc-edit-status' });
-    bar.appendChild(status);
-    const cancelBtn = el('button', { class: 'doc-edit-cancel' }, 'Close');
-    const saveBtn = el('button', { class: 'doc-edit-save' }, 'Save  ⌘S');
-    bar.appendChild(cancelBtn);
-    bar.appendChild(saveBtn);
-    wrap.appendChild(bar);
+    // Close + Save + status live in the top toolbar's editor cluster, not a
+    // separate bar. The toast-ui formatting toolbar stays inside the holder.
+    const status = el('span', { class: 'editor-status' });
+    const cancelBtn = el('button', { class: 'editor-act' }, 'Close');
+    const saveBtn = el('button', { class: 'editor-act primary' }, 'Save  ⌘S');
 
     const holder = el('div', { class: 'doc-edit-holder', id: 'doc-editor-holder' });
     wrap.appendChild(holder);
     viewer.appendChild(wrap);
+    setEditorBar({ kind: 'md', statusEl: status, actions: [cancelBtn, saveBtn] });
 
     const { fm, body } = splitFrontMatter(text);
     state.editorFrontMatter = fm;
@@ -3055,7 +3433,7 @@
       if (!state.editor) return;
       const md = state.editorFrontMatter + state.editor.getMarkdown();
       status.textContent = 'Saving…';
-      status.className = 'doc-edit-status';
+      status.className = 'editor-status';
       saveBtn.disabled = true;
       try {
         const r = await fetch('/api/save?path=' + encodeURIComponent(doc.path), {
@@ -3067,14 +3445,14 @@
         if (!r.ok || !data.ok) throw new Error(data.error || ('HTTP ' + r.status));
         state.editorOriginal = md;
         status.textContent = 'Saved ✓';
-        status.className = 'doc-edit-status ok';
+        status.className = 'editor-status ok';
         // Update mtime/size in the in-memory index so the tooltip stays accurate.
         const idx = state.docs.find(d => d.path === doc.path);
         if (idx) { idx.size = data.size; idx.mtime = data.mtime; }
         setTimeout(() => { if (status.textContent === 'Saved ✓') status.textContent = ''; }, 1500);
       } catch (err) {
         status.textContent = 'Error: ' + err.message;
-        status.className = 'doc-edit-status error';
+        status.className = 'editor-status error';
       } finally {
         saveBtn.disabled = false;
       }
@@ -4265,10 +4643,9 @@
     actions.appendChild(keepBtn);
     banner.appendChild(actions);
 
-    // Insert under the toolbar.
-    const bar = wrap.querySelector('.doc-edit-bar');
-    if (bar && bar.nextSibling) wrap.insertBefore(banner, bar.nextSibling);
-    else wrap.insertBefore(banner, wrap.firstChild);
+    // The editor toolbar now lives in the topbar, so drop the stale-edit
+    // banner at the top of the editor body.
+    wrap.insertBefore(banner, wrap.firstChild);
   }
 
   // ---------- two-pane "midnight commander" mode ----------

@@ -354,6 +354,21 @@ body.embed .pdf-frame-wrap { height: 100vh !important; }
 body.embed .sheet-frame-wrap { height: 100vh !important; }
 body.embed .docx-frame-wrap { height: 100vh !important; }
 body.embed .doc-view { max-width: 860px; }
+/* Embed mode hides the breadcrumb, but an open editor still needs its
+   Save/Close. When editing, float just the editor cluster (the crumbs stay
+   hidden) as a compact overlay in the top-right corner. */
+body.embed.has-editor .breadcrumb {
+  display: flex !important;
+  height: auto;
+  position: fixed;
+  top: 8px; right: 10px; left: auto; bottom: auto;
+  width: auto; padding: 5px 8px;
+  border: 1px solid var(--border); border-radius: 8px;
+  background: var(--bg-elev); box-shadow: var(--shadow-md); z-index: 50;
+  overflow: visible;
+}
+body.embed.has-editor .breadcrumb > :not(.crumb-actions) { display: none; }
+body.embed.has-editor .crumb-actions { margin-left: 0; }
 
 /* ---------- main ---------- */
 .main {
@@ -591,6 +606,41 @@ body.fileop-busy [data-pane-tree] { cursor: progress; }
   font-size: 11px;
   font-family: var(--font-mono);
 }
+
+/* Editor action cluster — the active editor's Save/Close/status/view-controls,
+   merged into the breadcrumb toolbar instead of a separate bar below it. The
+   save-surface note rides along as a hover tooltip on the ⓘ button. */
+.editor-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  margin-left: 2px;
+  padding-left: 10px;
+  border-left: 1px solid var(--border-strong);
+}
+.editor-status {
+  font-size: 12px;
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+.editor-status.dirty { color: var(--accent-strong); }
+.editor-status.ok { color: #1f7a3a; }
+.editor-status.error { color: var(--danger); }
+.crumb-actions .editor-info {
+  width: 24px;
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 13px;
+  color: var(--text-dim);
+  cursor: help;
+}
+.crumb-actions .editor-info:hover { color: var(--accent-strong); border-color: var(--accent); }
+.crumb-actions .editor-act.active { background: var(--accent); border-color: var(--accent); color: #fff; }
+.crumb-actions .editor-act.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+.crumb-actions .editor-act.primary:hover { background: var(--accent-strong); border-color: var(--accent-strong); color: #fff; }
+.crumb-actions .editor-act.primary:disabled { opacity: 0.5; cursor: default; }
 
 /* Fullscreen mode — strip everything except the right pane.
    The breadcrumb stays in the DOM and is repositioned as an auto-hiding
