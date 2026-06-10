@@ -20,7 +20,9 @@ Status legend: ✅ shipped · 🧪 experimental · 🛠 roadmap (not yet built)
 - ✅ **HTML rendering** — sandboxed same-origin iframe with relative-link interception so
   cross-document jumps stay in-app; relative images resolve against the doc's folder. *(0.1.0)*
 - ✅ **PDF rendering** — inline via the embedded Chromium PDF viewer, no plugin. *(0.1.0)*
-- ✅ **Spreadsheet viewing** — `.csv` / `.xlsx` rendered via [Univer](https://univer.ai/). *(#24)*
+- ✅ **Spreadsheet viewing** — `.csv` / `.xlsx` rendered via [Univer](https://univer.ai/), now with
+  full-fidelity `.xlsx` formatting: fonts, fills, borders, number formats, and merged cells are
+  preserved on render. *(#24, 0.3.0)*
 - ✅ **Generic file-kind rendering** — images, plain-text / source files, and a graceful
   "no preview" card for unsupported types. *(b2dc22a, part of #35)*
 - ✅ **DOCX viewing** — `.docx` rendered in-browser via [SuperDoc](https://superdoc.dev/), with the
@@ -35,9 +37,10 @@ Status legend: ✅ shipped · 🧪 experimental · 🛠 roadmap (not yet built)
 - ✅ **Markdown editor** — toast-ui editor; viewer refreshes after the editor closes so saved
   edits are immediately visible. *(0.1.0)*
 - ✅ **Spreadsheet editing** — `.csv→.csv` and `.xlsx→.xlsx` round-trip save in the Univer
-  viewer. The save-bar note states exactly what persists (evaluated cell values + sheet
-  structure; formulas/formats/styles/merges save as values), and saving a multi-sheet `.csv`
-  warns before dropping the extra tabs. *(#24, #42)*
+  viewer. `.xlsx` saves now preserve full formatting (fonts, fills, borders, number formats,
+  merged cells) rather than flattening to values, and saving a multi-sheet `.csv` warns before
+  dropping the extra tabs. The spreadsheet editor bars are merged into the single top toolbar.
+  *(#24, #42, 0.3.0)*
 - ✅ **DOCX editing** — in-browser `.docx` edit + save round-trip via SuperDoc. *(#27)*
 - ✅ **Export to Word** — bundled [pandoc-wasm](https://github.com/tweag/pandoc-wasm) powers an
   in-app "Export to Word" action and a terminal `pandoc` CLI, no system pandoc required. *(a82d81d)*
@@ -52,6 +55,16 @@ Status legend: ✅ shipped · 🧪 experimental · 🛠 roadmap (not yet built)
 - ✅ **New File / New Folder** buttons + refreshed sidebar expand/collapse icons. New folders
   (including empty ones) appear immediately — the node is inserted optimistically and the
   server triggers a reindex so it also survives a reload. *(#28, #44)*
+- ✅ **New-file menu with office templates** — create a blank new file, or a starter `.xlsx` /
+  `.docx` from the folder/`+` menu. *(0.3.0, 36aae18)*
+- ✅ **Split view** — display two tabs side by side with a draggable divider to control the
+  split. *(#50, 0.3.0)*
+- ✅ **Two-pane folder parity** — all folder behaviour (context menus, progressive collapse,
+  `+`/new menu) applies in the two-pane (double-folder) view as well as the single-pane tree.
+  *(#53, 0.3.0)*
+- ✅ **Progressive collapse** — clicking the collapse icon collapses the focused folder, then
+  walks up to its parent on each subsequent click until the whole mounted subtree is closed.
+  *(0.3.0)*
 - ✅ **Drag-to-move** — drag files from the listing pane onto tree folders to move them,
   with a compact row-sized drag image. The source row disappears immediately (optimistic),
   file ops are locked while a move/delete is resolving, and the server reindexes the affected
@@ -125,8 +138,9 @@ Status legend: ✅ shipped · 🧪 experimental · 🛠 roadmap (not yet built)
 
 ## 8. Packaging & distribution
 
-- ✅ **Electron Forge packaging** — universal macOS DMG (Apple Silicon + Intel). Windows/Linux
-  configured in `forge.config.js` but not yet built in CI. *(0.1.0)*
+- ✅ **Electron Forge packaging** — universal macOS DMG (Apple Silicon + Intel). A tag-triggered
+  CI workflow now builds the full matrix (macOS universal DMG/zip, Windows Squirrel installer,
+  Linux deb/rpm) and drafts a GitHub Release with the artifacts attached. *(0.1.0, 0.2.0)*
 - ✅ **ClawDoc app icon** (crab shuffling docs) as the packaged macOS icon. *(#2)*
 - ✅ **macOS Gatekeeper bypass documented** (`xattr -dr com.apple.quarantine`) until signed
   builds ship. *(0.1.0)*
