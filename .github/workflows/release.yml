@@ -99,6 +99,13 @@ jobs:
             -name "*.rpm" -o \
             -name "RELEASES" \
           \) -exec cp {} release/ \;
+          # The macOS DMG maker emits a bare "ClawDoc.dmg"; give it the
+          # versioned, arch-explicit name the README/download links expect
+          # (matches the macOS zip's "ClawDoc-darwin-universal-<ver>.zip").
+          VERSION="${GITHUB_REF_NAME#v}"
+          if [ -f "release/ClawDoc.dmg" ]; then
+            mv "release/ClawDoc.dmg" "release/ClawDoc-${VERSION}-universal.dmg"
+          fi
           ls -la release
 
       - name: Create / update GitHub Release
