@@ -65,6 +65,12 @@ const signAllAppsBeforeMake = async (_forgeConfig) => {
 module.exports = {
   packagerConfig: {
     name: 'ClawDoc',
+    // The packaged executable is named `clawdoc` (lowercase) on every platform.
+    // Without this, Electron Packager names the binary after `name` ("ClawDoc"),
+    // but the Linux deb/rpm makers look for the lowercased package name
+    // ("clawdoc") and fail with "could not find the Electron app binary". A
+    // lowercase executable is also the convention on Linux (.desktop Exec / bin).
+    executableName: 'clawdoc',
     appBundleId: 'ai.ntelio.clawdoc',
     // No extension — Electron Packager picks build/icon.icns on macOS,
     // build/icon.ico on Windows, and build/icon.png on Linux automatically.
