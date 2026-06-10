@@ -55,6 +55,9 @@
   // the existing render code keeps working unchanged.
   state.tabs = [];
   state.activeTabId = null;
+  // #50 — split view: a read-only companion pane to the right of the main
+  // viewer, showing another tab's doc. { on, ratio (left-pane fraction), tabId }.
+  state.split = { on: false, ratio: 0.5, tabId: null };
   state.isEmbed = false;
   // #26 — secondary windows (opened via "Open/Move to new window", marked with
   // ?w=1) persist their tab/UI state to per-window sessionStorage instead of the
@@ -544,6 +547,12 @@
       renderTree();
       renderTabs();
       if (state.mcMode) renderMcMode();
+      // Split view (#50): restore persisted state on first load; on later
+      // reindexes, refresh the companion pane (its doc may have changed/gone).
+      if (!state.isEmbed) {
+        if (state._splitInit) refreshSplitForTabs();
+        else { state._splitInit = true; restoreSplit(); }
+      }
       $('#doc-count').textContent = `${data.stats.docCount} docs · ${data.stats.md} md · ${data.stats.html} html · ${data.stats.pdf || 0} pdf · ${data.stats.xls || 0} sheets · ${data.stats.docx || 0} docx · ${data.stats.folderCount} folders`;
       const gen = new Date(data.generatedAt);
       if (!silent) setStatus('indexed ' + gen.toLocaleTimeString(), 'ok');
@@ -5045,6 +5054,188 @@
   // A docx preview mounts its own read-only SuperDoc instance (separate from
   // the main editor's _activeSuperdoc) so it must be torn down on close (#39).
   let _previewSuperdoc = null;
+  // The split-view companion pane (#50) renders read-only via the same engine
+  // and likewise owns its own docx instance, independent of both above.
+  let _splitSuperdoc = null;
+
+  // ---------- split view (#50) ----------
+  // The right pane is a read-only companion showing another tab's doc; the
+  // left pane (#viewer) stays the single fully-interactive editor. Full
+  // simultaneous dual-EDITING needs the editor singletons (_activeUniver,
+  // _activeSuperdoc, state.editor) to become pane-scoped — a follow-up.
+  function disposeSplitSuperdoc() {
+    if (!_splitSuperdoc) return;
+    try { _splitSuperdoc.destroy(); } catch {}
+    _splitSuperdoc = null;
+  }
+  function splitTabDoc() {
+    const t = state.tabs.find(x => x.id === state.split.tabId);
+    if (!t || !t.docPath) return null;
+    return state.docsByPath.get(t.docPath) || null;
+  }
+  function persistSplit() {
+    if (state.isEmbed || state.suppressPersist) return;
+    try {
+      tabStore().setItem('clawdoc.split', JSON.stringify({
+        on: state.split.on, ratio: state.split.ratio, tabId: state.split.tabId,
+      }));
+    } catch {}
+  }
+  function applySplitLayout() {
+    const divider = $('#split-divider'), pane = $('#split-pane'), viewer = $('#viewer');
+    const toggle = $('#split-toggle');
+    if (toggle) toggle.classList.toggle('active', state.split.on);
+    if (!divider || !pane || !viewer) return;
+    if (state.split.on) {
+      divider.classList.remove('hidden');
+      pane.classList.remove('hidden');
+      const r = Math.min(0.8, Math.max(0.2, state.split.ratio || 0.5));
+      viewer.style.flex = r + ' 1 0';
+      pane.style.flex = (1 - r) + ' 1 0';
+      const titleEl = $('#split-pane-title');
+      if (titleEl) { const d = splitTabDoc(); titleEl.textContent = d ? (d.title || d.name) : '(no document)'; }
+    } else {
+      divider.classList.add('hidden');
+      pane.classList.add('hidden');
+      viewer.style.flex = '';
+      pane.style.flex = '';
+    }
+  }
+  function renderSplitPane() {
+    if (!state.split.on) return;
+    const body = $('#split-pane-body');
+    if (!body) return;
+    disposeSplitSuperdoc();
+    const d = splitTabDoc();
+    if (!d) {
+      body.innerHTML = '';
+      body.appendChild(el('div', { class: 'empty' },
+        el('div', { class: 'empty-sub' }, 'This tab has no open document — open a file in it and it shows here.')));
+      return;
+    }
+    body.innerHTML = '<div class="preview-loading">Loading…</div>';
+    renderReadonlyInto(d, body, {
+      setSuperdoc: (sd) => { _splitSuperdoc = sd; },
+      // Guard the async docx mount: still wanted only if split is on and this
+      // doc is still the one assigned to the pane.
+      isWanted: () => { const cur = splitTabDoc(); return state.split.on && cur && cur.path === d.path; },
+    });
+  }
+  function openSplit(tabId) {
+    if (!tabId || !state.tabs.some(t => t.id === tabId)) return;
+    if (tabId === state.activeTabId) return; // left & right must differ
+    state.split.on = true;
+    state.split.tabId = tabId;
+    applySplitLayout();
+    renderSplitPane();
+    renderTabs();       // reflect the split badge on the companion tab
+    persistSplit();
+  }
+  function closeSplit() {
+    if (!state.split.on) return;
+    state.split.on = false;
+    disposeSplitSuperdoc();
+    const body = $('#split-pane-body'); if (body) body.innerHTML = '';
+    applySplitLayout();
+    renderTabs();
+    persistSplit();
+  }
+  // Open split from a specific tab: that tab goes in the companion pane. If it's
+  // the active tab, companion becomes the next tab instead (you can't split a
+  // tab against itself).
+  function openSplitWithTab(t) {
+    let rightId = t.id;
+    if (rightId === state.activeTabId) {
+      const others = state.tabs.filter(x => x.id !== state.activeTabId);
+      if (!others.length) { setStatus('Open a second tab to use split view', 'error'); return; }
+      rightId = others[0].id;
+    }
+    openSplit(rightId);
+  }
+  // Topbar toggle: off -> split active tab against its right neighbour; on -> close.
+  function toggleSplit() {
+    if (state.split.on) { closeSplit(); return; }
+    if (state.tabs.length < 2) { setStatus('Open a second tab to use split view', 'error'); return; }
+    const idx = state.tabs.findIndex(t => t.id === state.activeTabId);
+    const right = state.tabs[(idx + 1) % state.tabs.length];
+    openSplit(right.id);
+  }
+  // Swap which doc is editable (left) vs read-only (right).
+  function swapSplit() {
+    if (!state.split.on) return;
+    const rightId = state.split.tabId, leftId = state.activeTabId;
+    if (!rightId || rightId === leftId) return;
+    // Reassign the companion to the outgoing-left tab BEFORE switching, so the
+    // tab-switch's own split refresh doesn't see a left/right collision.
+    state.split.tabId = leftId;
+    switchTab(rightId);
+    if (state.activeTabId !== rightId) { // switch cancelled (unsaved edits) — revert
+      state.split.tabId = rightId;
+      applySplitLayout();
+      renderSplitPane();
+      return;
+    }
+    applySplitLayout();
+    renderSplitPane();
+    renderTabs();
+    persistSplit();
+  }
+  // Keep the companion pane coherent as tabs change: re-render if its doc
+  // changed, or close the split if its tab is gone or collides with active.
+  function refreshSplitForTabs() {
+    if (!state.split.on) return;
+    if (!state.tabs.some(t => t.id === state.split.tabId) || state.split.tabId === state.activeTabId) {
+      closeSplit();
+      return;
+    }
+    applySplitLayout();
+    renderSplitPane();
+  }
+  function restoreSplit() {
+    let o = null;
+    try { o = JSON.parse(tabStore().getItem('clawdoc.split') || 'null'); } catch {}
+    if (!o) return;
+    if (typeof o.ratio === 'number') state.split.ratio = o.ratio;
+    if (o.on && o.tabId && o.tabId !== state.activeTabId && state.tabs.some(t => t.id === o.tabId)) {
+      state.split.on = true;
+      state.split.tabId = o.tabId;
+      applySplitLayout();
+      renderSplitPane();
+    }
+  }
+  function initSplitDivider() {
+    const divider = $('#split-divider'), splitEl = $('#viewer-split');
+    if (!divider || !splitEl) return;
+    let activePointerId = null;
+    const endDrag = () => {
+      if (activePointerId === null) return;
+      try { divider.releasePointerCapture(activePointerId); } catch {}
+      activePointerId = null;
+      divider.classList.remove('dragging');
+      document.body.classList.remove('resizing-split');
+      persistSplit();
+    };
+    divider.addEventListener('pointerdown', (ev) => {
+      if (ev.button !== 0 || !state.split.on) return;
+      activePointerId = ev.pointerId;
+      divider.setPointerCapture(ev.pointerId);
+      divider.classList.add('dragging');
+      document.body.classList.add('resizing-split');
+      ev.preventDefault();
+    });
+    divider.addEventListener('pointermove', (ev) => {
+      if (ev.pointerId !== activePointerId) return;
+      const rect = splitEl.getBoundingClientRect();
+      if (rect.width) {
+        state.split.ratio = Math.min(0.8, Math.max(0.2, (ev.clientX - rect.left) / rect.width));
+        applySplitLayout();
+      }
+      ev.preventDefault();
+    });
+    divider.addEventListener('pointerup', endDrag);
+    divider.addEventListener('pointercancel', endDrag);
+    divider.addEventListener('dblclick', () => { state.split.ratio = 0.5; applySplitLayout(); persistSplit(); });
+  }
 
   function previewIsOpen() { return preview.open; }
 
@@ -5086,6 +5277,22 @@
     body.innerHTML = '<div class="preview-loading">Loading…</div>';
     modal.classList.remove('hidden');
 
+    await renderReadonlyInto(doc, body, {
+      setSuperdoc: (sd) => { _previewSuperdoc = sd; },
+      isWanted: () => preview.open && preview.currentPath === doc.path,
+    });
+  }
+
+  // Render a doc READ-ONLY into an arbitrary container — the shared engine
+  // behind both the Quick-Look preview modal and the split-view companion pane
+  // (#50). Every renderable type is handled with instances isolated from the
+  // main editors (#39). opts.setSuperdoc(instance) hands the caller the docx
+  // SuperDoc instance to own/dispose; opts.isWanted() guards the async docx
+  // mount against the target being closed or replaced mid-load.
+  async function renderReadonlyInto(doc, body, opts) {
+    opts = opts || {};
+    const setSuperdoc = opts.setSuperdoc || (() => {});
+    const isWanted = opts.isWanted || (() => true);
     const ext = (doc.ext || '').toLowerCase();
     const bust = '_ts=' + Date.now();
 
@@ -5157,15 +5364,15 @@
         const host = el('div', { class: 'preview-docx-host' });
         body.innerHTML = '';
         body.appendChild(host);
-        // The user may close the preview before SuperDoc finishes loading;
-        // bail out (and dispose) if so.
+        // The caller may close/replace the target before SuperDoc finishes
+        // loading; bail out (and dispose) if so.
         const sd = new SD({
           selector: host,
           documentMode: 'viewing',
           pagination: true,
-          documents: [{ id: 'preview-' + doc.path, type: 'docx', data: file }],
+          documents: [{ id: 'ro-' + doc.path, type: 'docx', data: file }],
         });
-        if (preview.open && preview.currentPath === doc.path) _previewSuperdoc = sd;
+        if (isWanted()) setSuperdoc(sd);
         else { try { sd.destroy(); } catch {} }
       } catch (err) {
         body.innerHTML = '';
@@ -5489,7 +5696,8 @@
     bar.innerHTML = '';
     for (const t of state.tabs) {
       const tab = el('div', {
-        class: 'tab' + (t.id === state.activeTabId ? ' active' : ''),
+        class: 'tab' + (t.id === state.activeTabId ? ' active' : '')
+          + (state.split.on && t.id === state.split.tabId ? ' split-companion' : ''),
         dataset: { tabId: t.id },
         title: tabLabel(t),
       });
@@ -5527,6 +5735,7 @@
     } finally {
       state.suppressPersist = false;
     }
+    refreshSplitForTabs();
     persistTabs();
   }
 
@@ -5547,6 +5756,7 @@
     } finally {
       state.suppressPersist = false;
     }
+    refreshSplitForTabs();
     persistTabs();
   }
 
@@ -5576,6 +5786,7 @@
     } finally {
       state.suppressPersist = false;
     }
+    refreshSplitForTabs();
     persistTabs();
   }
 
@@ -5587,6 +5798,7 @@
     if (state.activeTabId !== keepId) return; // switch was cancelled (unsaved edits)
     state.tabs = state.tabs.filter(t => t.id === keepId);
     renderTabs();
+    refreshSplitForTabs();
     persistTabs();
   }
 
@@ -5601,6 +5813,13 @@
     ];
     if (state.tabs.length > 1) {
       items.push({ label: 'Close others', onClick: () => closeOtherTabs(t.id) });
+    }
+    // Split view (#50): show this tab in the read-only companion pane.
+    items.push('-');
+    if (state.split.on && state.split.tabId === t.id) {
+      items.push({ label: 'Close split view', onClick: () => closeSplit() });
+    } else {
+      items.push({ label: 'Open in split view', onClick: () => openSplitWithTab(t) });
     }
     showCtxMenu(x, y, items, hasDoc ? basename(t.docPath) : 'Tab');
   }
@@ -6230,6 +6449,12 @@
     // MC two-pane mode
     $('#mc-toggle').addEventListener('click', toggleMcMode);
     $('#mc-exit').addEventListener('click', exitMcMode);
+
+    // Split view (#50)
+    $('#split-toggle').addEventListener('click', toggleSplit);
+    $('#split-close').addEventListener('click', closeSplit);
+    $('#split-swap').addEventListener('click', swapSplit);
+    initSplitDivider();
     document.querySelectorAll('[data-pane-filter]').forEach((inp) => {
       const paneId = inp.getAttribute('data-pane-filter');
       inp.addEventListener('input', debounce((ev) => {
