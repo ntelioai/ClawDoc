@@ -4780,7 +4780,7 @@
     row.addEventListener('contextmenu', (ev) => {
       ev.preventDefault();
       setMcFocus(paneId, node.path);
-      showFolderContextMenu(node, ev.clientX, ev.clientY);
+      showFolderContextMenu(node, ev.clientX, ev.clientY, { paneId });
     });
 
     attachMcDrag(row, node.path);
@@ -4866,6 +4866,46 @@
     // Keep just the virtual root entry so workspace roots remain at top level
     // (collapsed, but visible) — matches the main tree's collapse-all.
     pane.expanded = new Set(['']);
+    persistMcPanes();
+    renderMcPane(paneId);
+  }
+
+  // #52 in two-pane mode — progressive collapse scoped to one pane, anchored at
+  // the pane's focused folder (or a focused file's folder). Mirrors the main
+  // tree's progressiveCollapse but reads/writes the pane's own expanded set and
+  // a transient per-pane cursor; falls back to a blanket collapse when nothing
+  // is focused.
+  function mcProgressiveCollapse(paneId) {
+    const pane = state.mcPanes[paneId];
+    let focus = pane.focused || '';
+    if (focus && state.docsByPath && state.docsByPath.has(focus)) {
+      const f = state.docsByPath.get(focus).folder; // file focused -> its folder
+      focus = (f && f !== '.') ? f : '';
+    }
+    if (!focus) { pane.collapseCursor = null; collapseAllInMcPane(paneId); return; }
+    const mount = focus.split('/')[0]; // workspace root that owns the focus
+    let cursor = pane.collapseCursor;
+    if (!cursor || !(focus === cursor || focus.startsWith(cursor + '/'))) cursor = focus;
+    for (const p of subtreePaths(cursor)) pane.expanded.delete(p);
+    if (cursor === mount) { pane.expanded.add(mount); pane.collapseCursor = null; }
+    else { pane.collapseCursor = dirname(cursor) || mount; }
+    persistMcPanes();
+    renderMcPane(paneId);
+  }
+
+  // #36 in two-pane mode — recursively expand/collapse a single folder's subtree
+  // within one pane's expanded set (the context-menu "Expand/Collapse subtree").
+  function mcExpandSubtree(paneId, folderPath) {
+    const pane = state.mcPanes[paneId];
+    pane.expanded.add(folderPath);
+    for (const p of subtreePaths(folderPath)) pane.expanded.add(p);
+    persistMcPanes();
+    renderMcPane(paneId);
+  }
+  function mcCollapseSubtree(paneId, folderPath) {
+    const pane = state.mcPanes[paneId];
+    for (const p of subtreePaths(folderPath)) pane.expanded.delete(p);
+    if (folderPath) pane.expanded.delete(folderPath);
     persistMcPanes();
     renderMcPane(paneId);
   }
@@ -5694,8 +5734,14 @@
     showCtxMenu(x, y, items, multi ? `${sel.length} items` : (doc.title || doc.name));
   }
 
-  function showFolderContextMenu(node, x, y) {
-    const isExpanded = state.expanded.has(node.path);
+  // opts.paneId routes the expand/collapse/subtree actions to that two-pane
+  // (MC) pane's own state instead of the main tree, so the shared menu drives
+  // whichever view it was opened from (#53).
+  function showFolderContextMenu(node, x, y, opts) {
+    const paneId = opts && opts.paneId;
+    const isExpanded = paneId
+      ? state.mcPanes[paneId].expanded.has(node.path)
+      : state.expanded.has(node.path);
     // Workspace roots have no slash in their path ("Business", "business-shared").
     const isWorkspaceRoot = !node.path.includes('/');
     const items = [
@@ -5707,9 +5753,9 @@
       { label: 'Open in this tab', onClick: () => selectFolder(node.path) },
       { label: 'Open in new tab', onClick: () => newTab(null, { folder: node.path }) },
       '-',
-      { label: isExpanded ? 'Collapse' : 'Expand', onClick: () => toggleNode(node.path) },
-      { label: 'Expand subtree', onClick: () => expandSubtree(node.path) },
-      { label: 'Collapse subtree', onClick: () => collapseSubtree(node.path) },
+      { label: isExpanded ? 'Collapse' : 'Expand', onClick: () => paneId ? toggleMcNode(paneId, node.path) : toggleNode(node.path) },
+      { label: 'Expand subtree', onClick: () => paneId ? mcExpandSubtree(paneId, node.path) : expandSubtree(node.path) },
+      { label: 'Collapse subtree', onClick: () => paneId ? mcCollapseSubtree(paneId, node.path) : collapseSubtree(node.path) },
       { label: 'Reveal in Finder', onClick: () => { fetch('/api/open?path=' + encodeURIComponent(node.path)).catch(() => {}); } },
     ];
     // Copy folder — but never the workspace root pseudo-folder.
@@ -6196,10 +6242,23 @@
       btn.addEventListener('click', () => expandAllInMcPane(btn.getAttribute('data-pane-expand-all')));
     });
     document.querySelectorAll('[data-pane-collapse-all]').forEach((btn) => {
-      btn.addEventListener('click', () => collapseAllInMcPane(btn.getAttribute('data-pane-collapse-all')));
+      // Progressive collapse (#52), matching the main tree's collapse button.
+      btn.addEventListener('click', () => mcProgressiveCollapse(btn.getAttribute('data-pane-collapse-all')));
     });
-    document.querySelectorAll('[data-pane-new-folder]').forEach((btn) => {
-      btn.addEventListener('click', () => createFolderIn(mcCreateTarget(btn.getAttribute('data-pane-new-folder'))));
+    document.querySelectorAll('[data-pane-new]').forEach((btn) => {
+      // Full +/new menu (folder / markdown / Excel / Word), matching #tree-new.
+      btn.addEventListener('click', (ev) => {
+        ev.stopPropagation();
+        const paneId = btn.getAttribute('data-pane-new');
+        const rect = btn.getBoundingClientRect();
+        const target = mcCreateTarget(paneId);
+        showCtxMenu(rect.left, rect.bottom + 4, [
+          { label: 'New folder…',        onClick: () => createFolderIn(target) },
+          { label: 'New markdown file…', onClick: () => createFileIn(target, 'md') },
+          { label: 'New Excel file…',    onClick: () => createFileIn(target, 'xlsx') },
+          { label: 'New Word document…', onClick: () => createFileIn(target, 'docx') },
+        ]);
+      });
     });
     applyMcMode(); // restore persisted mc state
 
