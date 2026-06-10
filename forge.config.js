@@ -35,6 +35,23 @@ const cleanupNodePtyBuildArtifacts = (buildPath, _electronVersion, _platform, _a
       const p = path.join(buildPath, 'node_modules/node-pty', sub);
       if (fs.existsSync(p)) fs.rmSync(p, { recursive: true, force: true });
     }
+    // On Linux, RPM's %install runs `strip` over every ELF in the payload and
+    // dies on node-pty's foreign-arch prebuild (linux-arm64/pty.node on an
+    // x86_64 host: "strip: Unable to recognise the format of the input file").
+    // An x64 .deb/.rpm only needs the linux-x64 prebuild, so drop every other
+    // prebuild directory. (macOS keeps both arches for universal stitching, so
+    // this is scoped to linux only.)
+    if (_platform === 'linux') {
+      const prebuildsDir = path.join(buildPath, 'node_modules/node-pty/prebuilds');
+      if (fs.existsSync(prebuildsDir)) {
+        const keep = `linux-${_arch}`;
+        for (const entry of fs.readdirSync(prebuildsDir)) {
+          if (entry !== keep) {
+            fs.rmSync(path.join(prebuildsDir, entry), { recursive: true, force: true });
+          }
+        }
+      }
+    }
     callback();
   } catch (err) {
     callback(err);
