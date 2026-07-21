@@ -18,10 +18,10 @@ Everything is local — there's no server, no upload, no telemetry. ClawDoc read
 
 ## Download
 
-**[Download ClawDoc 0.3.0 for macOS (Universal: Apple Silicon + Intel)](https://github.com/ntelioai/ClawDoc/releases/download/v0.3.0/ClawDoc-0.3.0-universal.dmg)** · 231 MB  
-**[Download ClawDoc 0.3.0 for Windows (x64)](https://github.com/ntelioai/ClawDoc/releases/download/v0.3.0/ClawDoc-0.3.0.Setup.exe)** · 163 MB
+**[Download ClawDoc 0.3.1 for macOS (Universal: Apple Silicon + Intel)](https://github.com/ntelioai/ClawDoc/releases/download/v0.3.1/ClawDoc-0.3.1-universal.dmg)** · 231 MB  
+**[Download ClawDoc 0.3.1 for Windows (x64)](https://github.com/ntelioai/ClawDoc/releases/download/v0.3.1/ClawDoc-0.3.1.Setup.exe)** · 163 MB
 
-**Linux:** [`.deb`](https://github.com/ntelioai/ClawDoc/releases/download/v0.3.0/clawdoc_0.3.0_amd64.deb) (x64, 105 MB) · [`.rpm`](https://github.com/ntelioai/ClawDoc/releases/download/v0.3.0/clawdoc-0.3.0-1.x86_64.rpm) (x64, 109 MB)
+**Linux:** [`.deb`](https://github.com/ntelioai/ClawDoc/releases/download/v0.3.1/clawdoc_0.3.1_amd64.deb) (x64, 105 MB) · [`.rpm`](https://github.com/ntelioai/ClawDoc/releases/download/v0.3.1/clawdoc-0.3.1-1.x86_64.rpm) (x64, 109 MB)
 
 ### First-launch on macOS
 
