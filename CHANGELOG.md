@@ -6,6 +6,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [0.3.1] — 2026-07-21
+
+### Fixed
+- Git status no longer pins a CPU core and churns gigabytes of memory on workspaces with a large packed history. `git.js` never handed isomorphic-git a cache, so every call started cold and the first packed object it read pulled the entire `.pack` into memory and re-verified its SHA-1 — on a workspace whose history had been gc'd into a ~1GB packfile, a single `status()` could run for minutes, and the UI polls it every 60s per workspace. Each workspace now keeps one cache for the process lifetime.
+- Ahead/behind is computed by walking out from each tip until it reaches the other, instead of always enumerating up to 500 commits from both sides, and the result is memoized per tip pair. A workspace whose remote is in sync no longer touches the packfile at all.
+- Ahead/behind counts are now correct on branches that have diverged by more than a few hundred commits (previously reported the walk cap rather than the real distance).
+
 ## [0.3.0] — 2026-06-10
 
 ### Added
@@ -52,5 +59,6 @@ Initial public release.
 - Absolute `claude` CLI paths are tried before falling back to `PATH` lookup, with an explicit probe so a missing binary surfaces as a clear error rather than a silent spawn failure.
 - Spurious "file changed on disk" banner no longer fires after every save (was triggered by our own atomic-write temp files).
 
-[Unreleased]: https://github.com/ntelioai/ClawDoc/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/ntelioai/ClawDoc/compare/v0.3.1...HEAD
+[0.3.1]: https://github.com/ntelioai/ClawDoc/releases/tag/v0.3.1
 [0.1.0]: https://github.com/ntelioai/ClawDoc/releases/tag/v0.1.0

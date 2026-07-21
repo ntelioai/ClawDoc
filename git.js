@@ -13,7 +13,20 @@ const { diffLines, createTwoFilesPatch } = require('diff');
 const DEFAULT_AUTHOR = { name: 'clawdoc', email: 'clawdoc@local' };
 
 // `isomorphic-git` wants `{ fs, dir }` everywhere; this trims the boilerplate.
-const ctx = (dir) => ({ fs, dir });
+//
+// The `cache` matters as much as the path. Without one, isomorphic-git starts
+// each call with an empty cache, so the first object it reads out of a packfile
+// re-reads the entire .pack into memory and re-verifies its SHA-1. Once a
+// workspace's pack has been gc'd into a single ~1GB file that costs seconds and
+// gigabytes of allocation *per call* — and status() makes hundreds of calls via
+// countAheadBehind. One cache per workspace, held for the process lifetime,
+// collapses that to a single load.
+const caches = new Map();
+const ctx = (dir) => {
+  let cache = caches.get(dir);
+  if (!cache) { cache = {}; caches.set(dir, cache); }
+  return { fs, dir, cache };
+};
 
 function isRepo(dir) {
   try { return fs.statSync(path.join(dir, '.git')).isDirectory(); }
@@ -62,31 +75,63 @@ async function status(dir) {
 }
 
 // Walk two histories and count divergence. isomorphic-git has no built-in
-// "rev-list --count A..B" so we do the obvious set-difference on commit oids.
+// "rev-list --count A..B", so walk out from each tip and stop the moment we
+// reach the other one — the commits traversed before that *are* the divergence.
+//
+// Stopping early matters for more than speed. isomorphic-git reads an entire
+// .pack into memory (and SHA-1 verifies it) the first time it wants a packed
+// object. Recent commits are normally loose, so a walk that ends after a few
+// steps never touches the pack at all, while one that runs to `cap` pins ~1GB
+// for a workspace whose history has been gc'd into a single packfile. Histories
+// that have genuinely diverged further than `cap` still report the capped
+// number, exactly as before.
+// Memoized on the tip pair: the answer can only change when one of the two refs
+// moves, so a 60s status poll shouldn't re-walk history it already walked.
+const aheadBehindMemo = new Map(); // dir -> { local, remote, ahead, behind }
+
 async function countAheadBehind(dir, local, remote) {
   if (local === remote) return { ahead: 0, behind: 0 };
-  const localOids = new Set();
-  const remoteOids = new Set();
-  const cap = 500; // refuse to walk forever on huge repos
-  const walk = async (start, sink) => {
+  const memo = aheadBehindMemo.get(dir);
+  if (memo && memo.local === local && memo.remote === remote) {
+    return { ahead: memo.ahead, behind: memo.behind };
+  }
+
+  // High enough that a workspace left unpushed for months still resolves to a
+  // true ancestor count rather than a made-up "diverged both ways", low enough
+  // to stay bounded. Only reached once per tip pair thanks to the memo above.
+  const cap = 1000;
+  // Commits traversed walking back from `start` before reaching `stop`, or null
+  // if `stop` isn't an ancestor of `start` within `cap`.
+  const distanceTo = async (start, stop) => {
     const seen = new Set();
     const stack = [start];
-    while (stack.length && sink.size < cap) {
+    let n = 0;
+    while (stack.length && n < cap) {
       const oid = stack.pop();
       if (seen.has(oid)) continue;
+      if (oid === stop) return n;
       seen.add(oid);
-      sink.add(oid);
+      n++;
       let c;
       try { c = await git.readCommit({ ...ctx(dir), oid }); } catch { continue; }
       for (const p of c.commit.parent) stack.push(p);
     }
+    return null;
   };
-  await walk(local, localOids);
-  await walk(remote, remoteOids);
-  let ahead = 0, behind = 0;
-  for (const o of localOids) if (!remoteOids.has(o)) ahead++;
-  for (const o of remoteOids) if (!localOids.has(o)) behind++;
-  return { ahead, behind };
+
+  // Nearly always one tip is simply an ancestor of the other ("N to push",
+  // "N to pull"). Answering that takes one short walk, which on a synced repo
+  // stays inside the loose objects and never faults in the packfile. Only a
+  // genuine fork needs both walks.
+  let out;
+  const ahead = await distanceTo(local, remote);
+  if (ahead !== null) out = { ahead, behind: 0 };
+  else {
+    const behind = await distanceTo(remote, local);
+    out = behind !== null ? { ahead: 0, behind } : { ahead: cap, behind: cap };
+  }
+  aheadBehindMemo.set(dir, { local, remote, ...out });
+  return out;
 }
 
 async function init(dir, opts = {}) {
