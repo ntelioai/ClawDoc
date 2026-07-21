@@ -30,7 +30,12 @@ jobs:
           - os: macos-latest
             artifact_glob: out/make/**/*
             forge_args: --platform=darwin --arch=universal
-          - os: windows-latest
+          # Pinned rather than windows-latest: the latest image ships Visual
+          # Studio 18, which the @electron/node-gyp we resolve reports as
+          # `unknown version "undefined"` before giving up with "could not find
+          # a version of Visual Studio 2017 or newer", so node-pty can't
+          # rebuild. Unpin once the toolchain understands VS 18.
+          - os: windows-2022
             artifact_glob: out/make/**/*
             forge_args: ""
           - os: ubuntu-latest
