@@ -9,7 +9,7 @@
 //    workspace folder and persist it via CLAWDOC_ROOT before requiring serve.js.
 //  - Wait for the HTTP port to accept connections, then open the window.
 
-const { app, BrowserWindow, dialog } = require('electron');
+const { app, BrowserWindow, dialog, session } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const net = require('net');
@@ -53,8 +53,25 @@ function pickWorkspaceSync() {
   return result[0];
 }
 
+// Deck "Export PDF" (and any other in-app download, e.g. jsPDF pdf.save()) fires
+// a browser download. In the packaged app there's no Chrome download UI, so
+// without this the file would go nowhere: pop a Save dialog pre-filled with the
+// download's own filename, defaulting to the user's Downloads folder. Attached
+// to the default session, which every ClawDoc window shares.
+function installDownloadHandler() {
+  session.defaultSession.on('will-download', (_event, item) => {
+    try {
+      const downloads = app.getPath('downloads');
+      item.setSaveDialogOptions({ defaultPath: path.join(downloads, item.getFilename()) });
+    } catch (err) {
+      console.error('[clawdoc] will-download handler failed:', err && err.stack || err);
+    }
+  });
+}
+
 async function start() {
   await app.whenReady();
+  installDownloadHandler();
 
   // Redirect serve.js's writable files (settings.json, index.json, search.json) to userData.
   const dataDir = app.getPath('userData');

@@ -2202,7 +2202,7 @@
       const iframe = el('iframe', {
         class: 'html-frame',
         src: rawUrl,
-        sandbox: 'allow-same-origin allow-scripts allow-popups allow-forms allow-modals',
+        sandbox: 'allow-same-origin allow-scripts allow-popups allow-forms allow-modals allow-downloads',
       });
       iframe.addEventListener('load', () => hookIframeLinks(iframe, doc));
       wrap.appendChild(iframe);
@@ -5908,7 +5908,7 @@
       const iframe = el('iframe', {
         class: 'preview-iframe',
         src,
-        sandbox: 'allow-same-origin allow-scripts allow-popups allow-forms allow-modals',
+        sandbox: 'allow-same-origin allow-scripts allow-popups allow-forms allow-modals allow-downloads',
       });
       body.innerHTML = '';
       body.appendChild(iframe);
