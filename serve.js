@@ -466,6 +466,17 @@ const server = http.createServer((req, res) => {
   if (req.method === 'GET' && pathname === '/api/git/diff') {
     return handleGitDiff(res, query);
   }
+  if (req.method === 'GET' && pathname === '/agent/sessions') {
+    try { return sendJson(res, 200, { sessions: listAgentSessions(50) }); }
+    catch (err) { return sendJson(res, 500, { error: String(err && err.message || err) }); }
+  }
+  if (req.method === 'GET' && pathname === '/agent/session') {
+    const fp = findSessionFile((query && query.id) || '');
+    if (!fp) return sendJson(res, 404, { error: 'session not found' });
+    const data = readSessionTranscript(fp);
+    if (!data) return sendJson(res, 500, { error: 'could not read session' });
+    return sendJson(res, 200, Object.assign({ id: query.id }, data));
+  }
   if (req.method === 'GET' && pathname === '/api/github/me') {
     return handleGithubMe(res);
   }
@@ -575,14 +586,20 @@ function handleSave(req, res, query) {
   if (!r) return sendText(res, 403, '{"error":"forbidden or unknown workspace"}', 'application/json');
   const fp = r.fp;
   const ext = path.extname(fp).toLowerCase();
-  // Saveable kinds: markdown (text), plus the binary round-trips —
-  // .csv (text) and .xlsx (binary) from #24, and .docx (binary) from #27.
-  // Everything else stays read-only. We never utf8-decode the body for any
-  // kind: the raw request bytes are written through verbatim, which is
+  // Saveable kinds: markdown (text), the binary round-trips — .csv (text) and
+  // .xlsx (binary) from #24, and .docx (binary) from #27 — plus the plain-text
+  // formats editable in the in-app code editor (must mirror TEXT_EXTS in
+  // app.js). Everything else stays read-only. We never utf8-decode the body for
+  // any kind: the raw request bytes are written through verbatim, which is
   // byte-exact for text too and lossless for binary office files.
-  const SAVEABLE = new Set(['.md', '.markdown', '.csv', '.xlsx', '.docx']);
+  const TEXT_SAVEABLE = ['.txt', '.text', '.tsv', '.json', '.jsonc', '.yaml', '.yml',
+    '.xml', '.toml', '.ini', '.cfg', '.conf', '.log', '.js', '.mjs', '.cjs', '.ts',
+    '.tsx', '.jsx', '.css', '.scss', '.less', '.py', '.rb', '.go', '.rs', '.java',
+    '.c', '.h', '.cpp', '.hpp', '.cc', '.cs', '.php', '.sh', '.bash', '.zsh', '.sql',
+    '.r', '.lua', '.pl', '.swift', '.kt', '.dart', '.vue', '.svelte'];
+  const SAVEABLE = new Set(['.md', '.markdown', '.csv', '.xlsx', '.docx', ...TEXT_SAVEABLE]);
   if (!SAVEABLE.has(ext)) {
-    return sendText(res, 400, '{"error":"only .md / .markdown / .csv / .xlsx / .docx files can be saved"}', 'application/json');
+    return sendText(res, 400, '{"error":"this file type is read-only and cannot be saved"}', 'application/json');
   }
 
   const MAX = 10 * 1024 * 1024; // 10 MB cap (covers xlsx/docx binaries too)
@@ -1300,6 +1317,14 @@ function findClaudeBinary() {
 }
 
 function pickTerminalCwd(query) {
+  // An explicit cwd (used when resuming a restored conversation whose root may
+  // differ from the current selection) wins, but only if it's inside a mounted
+  // root — never let the client spawn a process outside the workspaces.
+  const cwdParam = (query && query.cwd) || '';
+  if (cwdParam) {
+    const c = path.resolve(cwdParam);
+    if (ROOTS.some(r => c === r.path || c.startsWith(r.path + path.sep))) return c;
+  }
   const docPath = (query && query.docPath) || '';
   const folderPath = (query && query.folderPath) || '';
   if (docPath) {
@@ -1569,6 +1594,153 @@ function attachAgent(ws, query) {
 
   ws.on('close', () => { try { child.kill('SIGKILL'); } catch {} });
   ws.on('error', () => { try { child.kill('SIGKILL'); } catch {} });
+}
+
+// ---------- Claude session history (restore past conversations) ----------
+// Claude Code persists each conversation as newline-delimited JSON under
+// ~/.claude/projects/<encoded-cwd>/<sessionId>.jsonl. We surface those so the
+// rich client can list past conversations and re-open one (client renders the
+// transcript, then continues it via --resume). See app.js agHistory* / agRestore.
+const CLAUDE_PROJECTS_DIR = path.join(require('os').homedir() || process.env.HOME || '', '.claude', 'projects');
+
+function cleanTranscriptText(t) {
+  return String(t || '')
+    .replace(/<ide_[a-z_]+>[\s\S]*?<\/ide_[a-z_]+>/g, '')
+    .replace(/<ide_[a-z_]+>[^<]*/g, '')
+    .replace(/<system-reminder>[\s\S]*?<\/system-reminder>/g, '')
+    .replace(/<command-[a-z-]+>[\s\S]*?<\/command-[a-z-]+>/g, '')
+    .replace(/<local-command-[a-z-]+>[\s\S]*?<\/local-command-[a-z-]+>/g, '')
+    .replace(/\[Image[^\]]*\]/g, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function extractUserText(message) {
+  if (!message) return '';
+  const c = message.content;
+  if (typeof c === 'string') return c;
+  if (Array.isArray(c)) {
+    if (c.some(b => b && b.type === 'tool_result')) return ''; // synthetic result line
+    return c.filter(b => b && b.type === 'text').map(b => b.text || '').join('\n');
+  }
+  return '';
+}
+
+// Lightweight metadata for the session list (title, first prompt, cwd, mtime).
+function readSessionMeta(fp) {
+  let raw;
+  try {
+    const st = fs.statSync(fp);
+    if (st.size > 60 * 1024 * 1024) return null;
+    raw = fs.readFileSync(fp, 'utf8');
+  } catch { return null; }
+  let cwd = '', title = '', preview = '', gitBranch = '', messages = 0;
+  for (const line of raw.split('\n')) {
+    if (!line) continue;
+    if (line.includes('"type":"assistant"')) messages++;
+    let o; try { o = JSON.parse(line); } catch { continue; }
+    if (o.aiTitle) title = o.aiTitle;             // last (most-refined) wins
+    if (!cwd && o.cwd) cwd = o.cwd;
+    if (!gitBranch && o.gitBranch) gitBranch = o.gitBranch;
+    if (!preview && o.type === 'user') {
+      const p = cleanTranscriptText(extractUserText(o.message));
+      if (p) preview = p.slice(0, 160);
+    }
+  }
+  return { cwd, title, preview, gitBranch, messages };
+}
+
+// List recent conversations whose cwd is inside a mounted root, newest first.
+function listAgentSessions(limit) {
+  limit = limit || 50;
+  let dirs;
+  try { dirs = fs.readdirSync(CLAUDE_PROJECTS_DIR); } catch { return []; }
+  const files = [];
+  for (const d of dirs) {
+    const full = path.join(CLAUDE_PROJECTS_DIR, d);
+    let entries;
+    try {
+      if (!fs.statSync(full).isDirectory()) continue;
+      entries = fs.readdirSync(full);
+    } catch { continue; }
+    for (const f of entries) {
+      if (!f.endsWith('.jsonl')) continue;
+      const fp = path.join(full, f);
+      try { files.push({ fp, id: f.slice(0, -6), mtime: fs.statSync(fp).mtimeMs }); } catch {}
+    }
+  }
+  files.sort((a, b) => b.mtime - a.mtime);
+  const out = [];
+  for (const file of files) {
+    if (out.length >= limit) break;
+    const meta = readSessionMeta(file.fp);
+    if (!meta || !meta.cwd) continue;
+    const root = ROOTS.find(r => meta.cwd === r.path || meta.cwd.startsWith(r.path + path.sep));
+    if (!root) continue;
+    if (!meta.messages) continue; // skip empty / aborted sessions
+    out.push({
+      id: file.id,
+      title: meta.title || meta.preview || 'Conversation',
+      preview: meta.preview || '',
+      messages: meta.messages,
+      mtime: file.mtime,
+      cwd: meta.cwd,
+      workspace: root.name,
+      gitBranch: meta.gitBranch || '',
+    });
+  }
+  return out;
+}
+
+function findSessionFile(id) {
+  if (!/^[A-Za-z0-9-]{8,}$/.test(id || '')) return null;
+  let dirs;
+  try { dirs = fs.readdirSync(CLAUDE_PROJECTS_DIR); } catch { return null; }
+  for (const d of dirs) {
+    const fp = path.join(CLAUDE_PROJECTS_DIR, d, id + '.jsonl');
+    if (fs.existsSync(fp)) return fp;
+  }
+  return null;
+}
+
+// Truncate very large block content so a re-opened transcript stays light.
+function capBlockContent(content) {
+  const CAP = 8000;
+  if (typeof content === 'string') return content.length > CAP ? content.slice(0, CAP) + '\n… (truncated)' : content;
+  if (Array.isArray(content)) {
+    return content.map(b => {
+      if (b && typeof b.text === 'string' && b.text.length > CAP) return Object.assign({}, b, { text: b.text.slice(0, CAP) + '\n… (truncated)' });
+      return b;
+    });
+  }
+  return content;
+}
+
+// Parse a transcript into the same {type, message} shape the live event stream
+// uses, so the client can render it with the existing renderers.
+function readSessionTranscript(fp) {
+  let raw;
+  try { raw = fs.readFileSync(fp, 'utf8'); } catch { return null; }
+  const events = [];
+  let cwd = '', title = '', model = '', gitBranch = '';
+  for (const line of raw.split('\n')) {
+    if (!line) continue;
+    let o; try { o = JSON.parse(line); } catch { continue; }
+    if (o.aiTitle) title = o.aiTitle;
+    if (!cwd && o.cwd) cwd = o.cwd;
+    if (!gitBranch && o.gitBranch) gitBranch = o.gitBranch;
+    if ((o.type === 'user' || o.type === 'assistant') && o.message && !o.isSidechain && !o.isMeta) {
+      if (o.type === 'assistant' && o.message.model) model = o.message.model;
+      let content = o.message.content;
+      if (o.type === 'user' && Array.isArray(content)) {
+        content = content.map(b => (b && b.type === 'tool_result') ? Object.assign({}, b, { content: capBlockContent(b.content) }) : b);
+      }
+      events.push({ type: o.type, message: { content } });
+    }
+  }
+  const MAX = 2000;
+  const trimmed = events.length > MAX ? events.slice(events.length - MAX) : events;
+  return { title, cwd, model, gitBranch, events: trimmed, truncated: events.length > MAX };
 }
 
 // ---------- git / github handlers ----------

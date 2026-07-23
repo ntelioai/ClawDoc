@@ -1188,11 +1188,16 @@
         histBtn.addEventListener('click', () => gh.openHistory(state.currentDoc));
         actions.appendChild(histBtn);
       }
-      // Hide "Edit" while the WYSIWYG editor is already open — its Save/Close
-      // take over in the editor cluster.
+      // Hide "Edit" while an editor is already open — its Save/Close take over
+      // in the editor cluster. Markdown opens the WYSIWYG editor; plain-text
+      // formats (json/yaml/txt/code) open the CodeMirror text editor.
       if (isMd && !state.editorBar) {
         const edit = el('button', { class: 'btn-accent', title: 'Edit in WYSIWYG editor' }, 'Edit');
         edit.addEventListener('click', () => startEditing(state.currentDoc));
+        actions.appendChild(edit);
+      } else if (!isMd && !state.editorBar && docKind(state.currentDoc) === 'text') {
+        const edit = el('button', { class: 'btn-accent', title: 'Edit as plain text' }, 'Edit');
+        edit.addEventListener('click', () => startEditingText(state.currentDoc));
         actions.appendChild(edit);
       }
     }
@@ -2181,6 +2186,7 @@
     // #viewer alone won't release.
     disposeSpreadsheet();
     disposeSuperdoc();
+    disposeCodeEditor();
     viewer.innerHTML = '';
     const kind = docKind(doc);
     const reload = !!(opts && opts.reload);
@@ -2632,7 +2638,7 @@
         && handleListKeydown(ev)) {
       return;
     }
-    if (meta && ev.key === 's' && state.editor) {
+    if (meta && ev.key === 's' && (state.editor || state.codeEditor)) {
       ev.preventDefault();
       if (state.editorSaveFn) state.editorSaveFn();
       return;
@@ -3355,6 +3361,10 @@
       if (!confirm('You have unsaved document changes. Discard them?')) return false;
       disposeSuperdoc();
     }
+    if (state.codeEditor) {
+      if (isCodeEditorDirty() && !confirm('You have unsaved changes. Discard them?')) return false;
+      disposeCodeEditor();
+    }
     if (!state.editor) return true;
     if (!isEditorDirty()) { destroyEditor(); return true; }
     if (confirm('You have unsaved changes. Discard them?')) { destroyEditor(); return true; }
@@ -3456,6 +3466,219 @@
         status.textContent = 'Saved ✓';
         status.className = 'editor-status ok';
         // Update mtime/size in the in-memory index so the tooltip stays accurate.
+        const idx = state.docs.find(d => d.path === doc.path);
+        if (idx) { idx.size = data.size; idx.mtime = data.mtime; }
+        setTimeout(() => { if (status.textContent === 'Saved ✓') status.textContent = ''; }, 1500);
+      } catch (err) {
+        status.textContent = 'Error: ' + err.message;
+        status.className = 'editor-status error';
+      } finally {
+        saveBtn.disabled = false;
+      }
+    };
+    saveBtn.addEventListener('click', doSave);
+    state.editorSaveFn = doSave;
+  }
+
+  // ---------- code / text editor (CodeMirror 5, lazy CDN + textarea fallback) ----------
+  // Text formats (json, yaml, txt, source code…) render read-only as a <pre> in
+  // renderDoc; the breadcrumb "Edit" button opens this editor so they're
+  // editable in-app. CodeMirror gives syntax highlighting + line numbers when it
+  // loads; if the CDN is blocked we fall back to a plain <textarea> so editing
+  // always works (offline / packaged Electron). Save/Close and the dirty-nav
+  // guard reuse the same scaffolding as the markdown/sheet/docx editors.
+  state.codeEditor = null;      // { getValue, setValue, focus, cm? , ta? }
+  state.codeEditorDoc = null;
+  state.codeEditorOriginal = '';
+
+  let _cmLoad = null;
+  const CM_BASE = 'https://cdn.jsdelivr.net/npm/codemirror@5.65.16/';
+  function loadCodeMirror() {
+    if (_cmLoad) return _cmLoad;
+    const link = document.createElement('link');
+    link.rel = 'stylesheet';
+    link.href = CM_BASE + 'lib/codemirror.min.css';
+    document.head.appendChild(link);
+    _cmLoad = (async () => {
+      await loadScriptOnce(CM_BASE + 'lib/codemirror.min.js');
+      // Modes + addons resolve against CM core at instantiation time, so load
+      // them all in parallel; a single failed mode shouldn't block the editor.
+      await Promise.all([
+        'mode/javascript/javascript.min.js',
+        'mode/yaml/yaml.min.js',
+        'mode/xml/xml.min.js',
+        'mode/css/css.min.js',
+        'mode/htmlmixed/htmlmixed.min.js',
+        'mode/markdown/markdown.min.js',
+        'mode/python/python.min.js',
+        'mode/shell/shell.min.js',
+        'mode/sql/sql.min.js',
+        'mode/clike/clike.min.js',
+        'mode/toml/toml.min.js',
+        'addon/edit/matchbrackets.min.js',
+        'addon/edit/closebrackets.min.js',
+        'addon/selection/active-line.min.js',
+      ].map(p => loadScriptOnce(CM_BASE + p).catch(() => {})));
+    })();
+    return _cmLoad;
+  }
+
+  function cmModeFor(ext) {
+    const e = (ext || '').toLowerCase();
+    if (e === 'json' || e === 'jsonc') return { name: 'javascript', json: true };
+    if (['js', 'mjs', 'cjs', 'jsx'].includes(e)) return 'text/javascript';
+    if (['ts', 'tsx'].includes(e)) return 'text/typescript';
+    if (['yaml', 'yml'].includes(e)) return 'yaml';
+    if (['html', 'htm', 'vue', 'svelte'].includes(e)) return 'htmlmixed';
+    if (['xml', 'svg'].includes(e)) return 'xml';
+    if (['css', 'scss', 'less'].includes(e)) return 'css';
+    if (['md', 'markdown'].includes(e)) return 'markdown';
+    if (e === 'py') return 'python';
+    if (['sh', 'bash', 'zsh'].includes(e)) return 'shell';
+    if (e === 'sql') return 'sql';
+    if (e === 'toml') return 'toml';
+    if (['c', 'h', 'cpp', 'hpp', 'cc', 'java', 'cs', 'go', 'rs', 'swift', 'kt', 'dart', 'php'].includes(e)) return 'text/x-csrc';
+    return null; // plain text
+  }
+
+  // Make a bare <textarea> behave enough like a code editor for the fallback
+  // path: Tab inserts spaces (and doesn't move focus), Enter keeps indentation.
+  function wireTextareaTabs(ta) {
+    ta.addEventListener('keydown', (e) => {
+      if (e.key === 'Tab') {
+        e.preventDefault();
+        const s = ta.selectionStart, en = ta.selectionEnd;
+        ta.setRangeText('  ', s, en, 'end');
+      } else if (e.key === 'Enter') {
+        const s = ta.selectionStart;
+        const lineStart = ta.value.lastIndexOf('\n', s - 1) + 1;
+        const indent = (ta.value.slice(lineStart, s).match(/^[ \t]*/) || [''])[0];
+        if (indent) {
+          e.preventDefault();
+          ta.setRangeText('\n' + indent, ta.selectionStart, ta.selectionEnd, 'end');
+        }
+      }
+    });
+  }
+
+  function isCodeEditorDirty() {
+    return !!(state.codeEditor && state.codeEditor.getValue() !== state.codeEditorOriginal);
+  }
+  function disposeCodeEditor() {
+    if (state.codeEditor && state.codeEditor.cm) {
+      try { state.codeEditor.cm.toTextArea && state.codeEditor.cm.toTextArea(); } catch {}
+    }
+    state.codeEditor = null;
+    state.codeEditorDoc = null;
+    state.codeEditorOriginal = '';
+    if (state.editorBar && state.editorBar.kind === 'code') clearEditorBar();
+  }
+
+  // Strip // and /* */ comments and trailing commas so JSONC / lenient JSON can
+  // be validated without falsely rejecting valid-in-context files.
+  function looksLikeValidJson(text, lenient) {
+    let t = text;
+    if (lenient) {
+      t = t.replace(/\/\*[\s\S]*?\*\//g, '')
+           .replace(/(^|[^:"'])\/\/[^\n\r]*/g, '$1')
+           .replace(/,(\s*[}\]])/g, '$1');
+    }
+    try { JSON.parse(t); return { ok: true }; }
+    catch (err) { return { ok: false, error: err.message }; }
+  }
+
+  async function startEditingText(doc) {
+    if (!doc) return;
+    if ((state.editor || state.codeEditor || isSheetDirty() || isDocxDirty()) && !confirmDiscardEdits()) return;
+
+    let text;
+    try {
+      const r = await fetch('/file?path=' + encodeURIComponent(doc.path) + '&_ts=' + Date.now(), { cache: 'no-store' });
+      if (!r.ok) throw new Error('HTTP ' + r.status);
+      text = await r.text();
+    } catch (err) {
+      uiAlert('Failed to load file: ' + err.message);
+      return;
+    }
+
+    const viewer = $('#viewer');
+    viewer.innerHTML = '';
+    const wrap = el('div', { class: 'doc-edit' });
+    const status = el('span', { class: 'editor-status' });
+    const cancelBtn = el('button', { class: 'editor-act' }, 'Close');
+    const saveBtn = el('button', { class: 'editor-act primary' }, 'Save  ⌘S');
+    const holder = el('div', { class: 'doc-edit-holder code-edit-holder', id: 'code-editor-holder' });
+    wrap.appendChild(holder);
+    viewer.appendChild(wrap);
+    setEditorBar({
+      kind: 'code',
+      note: 'Plain-text editor — saves the file verbatim (no formatting applied).',
+      statusEl: status,
+      actions: [cancelBtn, saveBtn],
+    });
+
+    let widget;
+    try {
+      await loadCodeMirror();
+      if (!window.CodeMirror) throw new Error('CodeMirror unavailable');
+      const cm = window.CodeMirror(holder, {
+        value: text,
+        mode: cmModeFor(doc.ext),
+        lineNumbers: true,
+        lineWrapping: false,
+        indentUnit: 2,
+        tabSize: 2,
+        smartIndent: true,
+        matchBrackets: true,
+        autoCloseBrackets: true,
+        styleActiveLine: true,
+      });
+      cm.setSize('100%', '100%');
+      setTimeout(() => { try { cm.refresh(); cm.focus(); } catch {} }, 0);
+      widget = { getValue: () => cm.getValue(), focus: () => cm.focus(), cm };
+    } catch {
+      const ta = el('textarea', { class: 'code-edit-fallback', spellcheck: 'false', wrap: 'off' });
+      ta.value = text;
+      holder.appendChild(ta);
+      wireTextareaTabs(ta);
+      widget = { getValue: () => ta.value, focus: () => ta.focus(), ta };
+      setTimeout(() => ta.focus(), 0);
+    }
+
+    state.codeEditor = widget;
+    state.codeEditorDoc = doc;
+    state.codeEditorOriginal = text;
+
+    cancelBtn.addEventListener('click', () => {
+      if (!confirmDiscardEdits()) return;
+      const fresh = state.docsByPath.get(doc.path) || doc;
+      renderDoc(fresh, '', { reload: true });
+    });
+
+    const doSave = async () => {
+      if (!state.codeEditor) return;
+      const body = state.codeEditor.getValue();
+      // Format-aware validation: block a save that would write invalid JSON
+      // (the most common footgun) unless the user insists.
+      const e = (doc.ext || '').toLowerCase();
+      if ((e === 'json' || e === 'jsonc') && body.trim()) {
+        const v = looksLikeValidJson(body, e === 'jsonc');
+        if (!v.ok && !confirm('Invalid JSON: ' + v.error + '\n\nSave anyway?')) return;
+      }
+      status.textContent = 'Saving…';
+      status.className = 'editor-status';
+      saveBtn.disabled = true;
+      try {
+        const r = await fetch('/api/save?path=' + encodeURIComponent(doc.path), {
+          method: 'POST',
+          headers: { 'Content-Type': 'text/plain; charset=utf-8' },
+          body,
+        });
+        const data = await r.json().catch(() => ({}));
+        if (!r.ok || !data.ok) throw new Error(data.error || ('HTTP ' + r.status));
+        state.codeEditorOriginal = body;
+        status.textContent = 'Saved ✓';
+        status.className = 'editor-status ok';
         const idx = state.docs.find(d => d.path === doc.path);
         if (idx) { idx.size = data.size; idx.mtime = data.mtime; }
         setTimeout(() => { if (status.textContent === 'Saved ✓') status.textContent = ''; }, 1500);
@@ -3751,6 +3974,7 @@
     $('#chat-panel').classList.remove('hidden');
     $('#claude-toggle').classList.add('active');
     updateChatContext();
+    syncBothClaude();
     // Defer init until the panel is laid out so fit() gets real dimensions.
     requestAnimationFrame(() => {
       ensureTerminal();
@@ -3763,6 +3987,7 @@
     chat.open = false;
     $('#chat-panel').classList.add('hidden');
     if (getClaudeClient() === 'pty') $('#claude-toggle').classList.remove('active');
+    syncBothClaude();
   }
   function toggleChat() { chat.open ? closeChat() : openChat(); }
 
@@ -3798,6 +4023,7 @@
       const dx = startX - e.clientX;
       const w = Math.max(380, Math.min(window.innerWidth - 200, startW + dx));
       panel.style.width = w + 'px';
+      syncClaudePin();
     });
     window.addEventListener('mouseup', () => {
       if (!dragging) return;
@@ -3805,6 +4031,7 @@
       document.body.style.cursor = '';
       try { chat.fit && chat.fit.fit(); } catch {}
       sendResize();
+      syncClaudePin();
     });
   }
 
@@ -3813,95 +4040,128 @@
   // Independent of the PTY panel (`chat`) above — both can be open at once so
   // the two can be compared. Event shapes: docs/roadmap/stream-json-notes.md.
   const AGENT_THEME_KEY = 'clawdoc:agentTheme';
+  const AGENT_TABS_KEY = 'clawdoc:agentTabs';
   const MODE_LABELS = {
     acceptEdits: 'Edit automatically',
     default: 'Ask before edits',
     plan: 'Plan mode',
     bypassPermissions: 'Auto (no prompts)',
   };
+  const DEFAULT_AGENT_MODE = 'acceptEdits';
+
+  // #63 — the client holds several independent conversations ("tabs"). UI-level
+  // state lives on `agent`; each conversation's own state (its own stream, log
+  // DOM, sessionId, running flag, tool cards…) lives on a session object in
+  // agent.tabs. agent.running mirrors the active session so external callers
+  // (the keyboard ESC handler, the client toggle) can read it cheaply.
   const agent = {
     open: false,
-    ws: null,
     initialized: false,
-    sessionWorkspace: '',  // top-level workspace name the session is rooted in
-    sessionId: '',         // captured from system/init, used for --resume
-    model: '',             // captured from system/init, shown in the ready status
-    cwd: '',               // absolute cwd reported by the server (for path links)
-    running: false,        // a turn is in flight
-    // Default to auto-accepting edits so the common "make me a file" case works.
-    // (The installed CLI has no headless permission-prompt mechanism, so the
-    // "Ask before edits" / default mode can't show a prompt — it just denies.)
-    mode: 'acceptEdits',
-    activeAssistant: null, // current streaming assistant .msg-body element
-    activeText: '',        // accumulated markdown for the active assistant block
-    toolCards: {},         // tool_use id -> { card, result }
-    queued: '',            // message typed while a turn was running
-    working: null,         // the "Claude is working…" indicator element
-    allowedTools: [],      // tools the user approved after a block (--allowedTools)
-    lastUserText: '',      // last message sent, for one-click retry after approval
+    running: false,        // mirrors the active session's running flag
+    tabs: [],
+    activeId: null,
+    seq: 0,
     theme: (() => {
       try { return localStorage.getItem(AGENT_THEME_KEY) === 'dark' ? 'dark' : 'light'; }
       catch { return 'light'; }
     })(),
   };
 
-  const agLog = () => $('#agent-log');
+  // Default to auto-accepting edits so the common "make me a file" case works.
+  // (The installed CLI has no headless permission-prompt mechanism, so the
+  // "Ask before edits" / default mode can't show a prompt — it just denies.)
+  function makeSession(opts) {
+    opts = opts || {};
+    agent.seq += 1;
+    return {
+      id: opts.id || ('c' + agent.seq),
+      title: opts.title || 'New chat',
+      log: el('div', { class: 'agent-log-pane' }),
+      ws: null,
+      sessionId: opts.sessionId || '',      // Claude session id, used for --resume
+      sessionWorkspace: opts.workspace || '',
+      cwd: opts.cwd || '',                   // absolute cwd, for path links + resume
+      model: opts.model || '',
+      mode: opts.mode || DEFAULT_AGENT_MODE,
+      running: false,
+      stopping: false,
+      activeAssistant: null,
+      activeText: '',
+      toolCards: {},
+      queued: '',
+      working: null,
+      allowedTools: [],
+      lastUserText: '',
+      started: !!opts.started,               // has sent/loaded anything
+      needsLoad: !!opts.needsLoad,           // restored tab whose transcript isn't fetched yet
+    };
+  }
+  function AS() { return agent.tabs.find(t => t.id === agent.activeId) || null; }
 
-  function agNearBottom() {
-    const l = agLog();
+  // ---- log helpers (all scoped to a session's own pane) ----
+  function agNearBottom(s) {
+    const l = s.log;
     return l && (l.scrollHeight - l.scrollTop - l.clientHeight < 80);
   }
-  function agScroll(force) {
-    const l = agLog();
-    if (l && (force || agNearBottom())) l.scrollTop = l.scrollHeight;
+  function agScroll(s, force) {
+    if (s !== AS()) return;                   // only the visible pane scrolls
+    const l = s.log;
+    if (l && (force || agNearBottom(s))) l.scrollTop = l.scrollHeight;
   }
-  function agClear() {
-    const l = agLog();
-    if (l) l.innerHTML = '<div class="agent-empty">Ask Claude anything about your docs — '
-      + 'type a message below to get started.</div>';
-    agent.activeAssistant = null;
-    agent.activeText = '';
-    agent.toolCards = {};
-  }
-  function agClearEmpty() {
-    const e = agLog() && agLog().querySelector('.agent-empty');
+  function agClearEmpty(s) {
+    const e = s.log.querySelector('.agent-empty');
     if (e) e.remove();
   }
-  function agAppend(node) {
-    const stick = agNearBottom();
-    agClearEmpty();
-    agLog().appendChild(node);
-    agBumpWorking();   // keep the "working…" row at the very bottom
-    agScroll(stick);
+  function agSetEmpty(s) {
+    s.log.innerHTML = '<div class="agent-empty">Ask Claude anything about your docs — '
+      + 'type a message below to get started.</div>';
+    s.activeAssistant = null;
+    s.activeText = '';
+    s.toolCards = {};
+    if (s.working) s.working = null;
+  }
+  function agSetLoading(s) {
+    s.log.innerHTML = '<div class="agent-empty">Loading conversation…</div>';
+  }
+  function agAppend(s, node) {
+    const stick = (s === AS()) ? agNearBottom(s) : false;
+    agClearEmpty(s);
+    s.log.appendChild(node);
+    agBumpWorking(s);                          // keep the "working…" row at the bottom
+    if (stick) s.log.scrollTop = s.log.scrollHeight;
   }
 
-  function setAgentStatus(msg, kind) {
+  function setFooter(msg, kind) {
     const s = $('#agent-status');
     if (!s) return;
     s.textContent = msg || '';
     s.className = 'chat-status' + (kind ? ' ' + kind : '');
   }
+  // Per-session status: only writes the shared footer when s is the active tab.
+  function agStatus(s, msg, kind) { if (s === AS()) setFooter(msg, kind); }
 
   // Render markdown into a .msg-body and turn workspace file paths into links.
-  function agMarkdownBody(text) {
+  function agMarkdownBody(text, s) {
     const body = el('div', { class: 'msg-body' });
     try { body.innerHTML = window.marked.parse(text || '', { gfm: true, breaks: false, mangle: false, headerIds: false }); }
     catch { body.textContent = text || ''; }
-    linkifyPaths(body);
+    linkifyPaths(body, s);
     return body;
   }
 
   // Resolve a path token from Claude's output to an index doc path, or null.
-  function agResolveDoc(token) {
+  function agResolveDoc(token, s) {
     let p = token;
-    if (agent.cwd && p.startsWith(agent.cwd + '/')) p = p.slice(agent.cwd.length + 1);
+    const cwd = (s && s.cwd) || '';
+    const ws = (s && s.sessionWorkspace) || '';
+    if (cwd && p.startsWith(cwd + '/')) p = p.slice(cwd.length + 1);
     else if (p.startsWith('/')) return null;            // absolute, outside cwd
-    const full = (agent.sessionWorkspace ? agent.sessionWorkspace + '/' : '') + p.replace(/^\.\//, '');
+    const full = (ws ? ws + '/' : '') + p.replace(/^\.\//, '');
     return state.docsByPath.has(full) ? full : null;
   }
 
   const PATH_RE = /((?:[\w.\-]+\/)*[\w.\-]+\.(?:md|markdown|html?|pdf|txt|json|csv|js|ts|css))(?::(\d+))?/g;
-  function linkifyPaths(root) {
+  function linkifyPaths(root, s) {
     const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, null);
     const targets = [];
     let n;
@@ -3916,20 +4176,20 @@
     for (const node of targets) {
       const frag = document.createDocumentFragment();
       let last = 0;
-      const s = node.nodeValue;
+      const str = node.nodeValue;
       let m;
       PATH_RE.lastIndex = 0;
-      while ((m = PATH_RE.exec(s))) {
-        const full = agResolveDoc(m[1]);
+      while ((m = PATH_RE.exec(str))) {
+        const full = agResolveDoc(m[1], s);
         if (!full) continue;
-        if (m.index > last) frag.appendChild(document.createTextNode(s.slice(last, m.index)));
+        if (m.index > last) frag.appendChild(document.createTextNode(str.slice(last, m.index)));
         const a = el('a', { class: 'agent-file-link', title: 'Open in ClawDoc' }, m[0]);
         a.addEventListener('click', (ev) => { ev.preventDefault(); selectDoc(full); });
         frag.appendChild(a);
         last = m.index + m[0].length;
       }
       if (last > 0) {
-        if (last < s.length) frag.appendChild(document.createTextNode(s.slice(last)));
+        if (last < str.length) frag.appendChild(document.createTextNode(str.slice(last)));
         node.parentNode.replaceChild(frag, node);
       }
     }
@@ -3969,7 +4229,7 @@
     if (n === 'websearch') return input.query || '';
     try { return JSON.stringify(input).slice(0, 120); } catch { return ''; }
   }
-  function agToolCard(block) {
+  function agToolCard(s, block) {
     const name = block.name || 'tool';
     const ico = TOOL_ICONS[toolIconKey(name)] || TOOL_ICONS.wrench;
     const card = el('div', { class: 'tool-card running' });
@@ -3980,10 +4240,6 @@
       el('span', { class: 'tool-chevron', html: '<svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 6 15 12 9 18"/></svg>' }),
     ]);
     const bodyEl = el('div', { class: 'tool-card-body' });
-    // For Edit/Write/MultiEdit, the diff IS the readable view — don't also dump
-    // the raw input JSON (which duplicated the whole file content and was the
-    // unreadable "json blob" in the feedback). For other tools, show a compact
-    // input block, collapsed inside the card.
     const diff = agBuildDiff(name, block.input);
     if (diff) {
       const host = el('div', { class: 'tool-diff' });
@@ -3998,14 +4254,12 @@
     head.addEventListener('click', () => card.classList.toggle('open'));
     card.appendChild(head);
     card.appendChild(bodyEl);
-    // Everything starts collapsed (a clean list of what Claude did); click any
-    // card header to expand its diff/result. The chevron signals it's clickable.
-    agent.toolCards[block.id] = { card, bodyEl, name };
-    agAppend(card);
-    agent.activeAssistant = null; // a tool ends the current text bubble
+    if (block.id) s.toolCards[block.id] = { card, bodyEl, name };
+    agAppend(s, card);
+    s.activeAssistant = null; // a tool ends the current text bubble
   }
-  function agAttachResult(toolUseId, content, isError) {
-    const ref = agent.toolCards[toolUseId];
+  function agAttachResult(s, toolUseId, content, isError) {
+    const ref = s.toolCards[toolUseId];
     if (!ref) return;
     ref.card.classList.remove('running');
     if (isError) ref.card.classList.add('error');
@@ -4050,7 +4304,7 @@
   }
 
   // ---- thinking + todos ----
-  function agThinking(text) {
+  function agThinking(s, text) {
     if (!text) return;
     const block = el('div', { class: 'thinking-block collapsed' });
     const toggle = el('div', { class: 'tb-toggle' }, '✦ thinking');
@@ -4058,10 +4312,10 @@
     toggle.addEventListener('click', () => block.classList.toggle('collapsed'));
     block.appendChild(toggle);
     block.appendChild(body);
-    agAppend(block);
-    agent.activeAssistant = null;
+    agAppend(s, block);
+    s.activeAssistant = null;
   }
-  function agTodos(input) {
+  function agTodos(s, input) {
     const todos = (input && input.todos) || [];
     if (!todos.length) return;
     const list = el('div', { class: 'todo-list' }, el('div', { class: 'todo-list-title' }, 'Todos'));
@@ -4072,20 +4326,20 @@
         el('span', {}, t.content || ''),
       ]));
     }
-    agAppend(list);
-    agent.activeAssistant = null;
+    agAppend(s, list);
+    s.activeAssistant = null;
   }
 
-  // ---- inline permission prompt (M6, defensive — fires only if the CLI asks) ----
-  function agPermPrompt(reqId, toolName, input) {
+  // ---- inline permission prompt (defensive — fires only if the CLI asks) ----
+  function agPermPrompt(s, reqId, toolName, input) {
     const box = el('div', { class: 'perm-prompt' });
     box.appendChild(el('div', { class: 'perm-title' }, 'Allow ' + (toolName || 'tool') + '?'));
     let detail = '';
     try { detail = JSON.stringify(input).slice(0, 240); } catch {}
     if (detail) box.appendChild(el('div', { class: 'perm-detail' }, detail));
     const decide = (decision) => {
-      if (agent.ws && agent.ws.readyState === 1) {
-        agent.ws.send(JSON.stringify({ t: 'permission', requestId: reqId, decision }));
+      if (s.ws && s.ws.readyState === 1) {
+        s.ws.send(JSON.stringify({ t: 'permission', requestId: reqId, decision }));
       }
       box.classList.add('answered');
       box.appendChild(el('div', { class: 'perm-detail' }, '→ ' + decision));
@@ -4095,33 +4349,31 @@
       el('button', { class: 'perm-deny', onclick: () => decide('deny') }, 'Deny'),
     ]);
     box.appendChild(actions);
-    agAppend(box);
+    agAppend(s, box);
   }
 
   // ---- event dispatch ----
-  function agHandleEvent(ev) {
+  function agHandleEvent(s, ev) {
     if (!ev || !ev.type) return;
     if (ev.type === 'system' && ev.subtype === 'init') {
-      if (ev.session_id) agent.sessionId = ev.session_id;
-      if (ev.model) agent.model = ev.model;
-      if (ev.permissionMode) agent.mode = ev.permissionMode;
-      // We're mid-turn here (init only arrives after the first message), so
-      // don't flip the footer to "ready" — agEndTurn shows it when the turn ends.
+      if (ev.session_id) { s.sessionId = ev.session_id; agPersist(); }
+      if (ev.model) s.model = ev.model;
+      if (ev.permissionMode) s.mode = ev.permissionMode;
       return;
     }
     if (ev.type === 'rate_limit_event') return;
     if (ev.type === 'control_request' && ev.request && ev.request.subtype === 'can_use_tool') {
-      agPermPrompt(ev.request_id, ev.request.tool_name, ev.request.input);
+      agPermPrompt(s, ev.request_id, ev.request.tool_name, ev.request.input);
       return;
     }
     if (ev.type === 'assistant') {
       const blocks = (ev.message && ev.message.content) || [];
       for (const b of blocks) {
-        if (b.type === 'thinking') agThinking(b.thinking);
-        else if (b.type === 'text') agAssistantText(b.text);
+        if (b.type === 'thinking') agThinking(s, b.thinking);
+        else if (b.type === 'text') agAssistantText(s, b.text);
         else if (b.type === 'tool_use') {
-          if ((b.name || '').toLowerCase() === 'todowrite') agTodos(b.input);
-          else agToolCard(b);
+          if ((b.name || '').toLowerCase() === 'todowrite') agTodos(s, b.input);
+          else agToolCard(s, b);
         }
       }
       return;
@@ -4130,45 +4382,54 @@
       const blocks = (ev.message && ev.message.content) || [];
       for (const b of blocks) {
         if (b && b.type === 'tool_result') {
-          agAttachResult(b.tool_use_id, b.content, b.is_error === true);
+          agAttachResult(s, b.tool_use_id, b.content, b.is_error === true);
         }
       }
       return;
     }
     if (ev.type === 'result') {
-      agEndTurn();
-      if (ev.session_id) agent.sessionId = ev.session_id;
+      agEndTurn(s);
+      if (ev.session_id) { s.sessionId = ev.session_id; agPersist(); }
       const denials = ev.permission_denials || [];
-      if (denials.length) agDenialNotice(denials);
-      if (ev.is_error) agSystem('Turn ended with an error' + (ev.subtype ? ' (' + ev.subtype + ')' : ''), true);
+      if (denials.length) agDenialNotice(s, denials);
+      if (ev.is_error) agSystem(s, 'Turn ended with an error' + (ev.subtype ? ' (' + ev.subtype + ')' : ''), true);
       return;
     }
   }
 
-  function agAssistantText(text) {
-    // Skip empty / whitespace-only text blocks. Claude often emits these between
-    // tool calls; rendered, they became tiny empty bubbles — the stack of faint
-    // "horizontal lines" in the conversation.
+  function agAssistantText(s, text) {
+    // Skip empty / whitespace-only text blocks (Claude emits these between tool
+    // calls; rendered they became tiny empty bubbles).
     if (text == null || !String(text).trim()) return;
-    // Each assistant text block is a complete chunk; append as its own bubble.
-    agent.activeText = text;
-    const body = agMarkdownBody(text);
+    s.activeText = text;
+    const body = agMarkdownBody(text, s);
     const msg = el('div', { class: 'msg msg-assistant' }, body);
-    agent.activeAssistant = msg;
-    agAppend(msg);
+    s.activeAssistant = msg;
+    agAppend(s, msg);
   }
 
-  function agSystem(text, isError) {
-    agAppend(el('div', { class: 'msg msg-system' + (isError ? ' error' : '') },
+  function agUserBubble(s, text) {
+    agAppend(s, el('div', { class: 'msg msg-user' }, el('div', { class: 'msg-body' }, text)));
+  }
+
+  function agSystem(s, text, isError) {
+    agAppend(s, el('div', { class: 'msg msg-system' + (isError ? ' error' : '') },
       el('div', { class: 'msg-body' }, text)));
   }
 
-  // One clear, actionable card when Claude was blocked from using a tool — this
-  // headless panel can't show a live approval prompt, so the tool was denied
-  // regardless of mode (acceptEdits only auto-allows edits; things like WebFetch
-  // still need approval). The fix is to pre-allow the *specific* tool for this
-  // session (--allowedTools) and retry — not to change the edit mode.
-  function agDenialNotice(denials) {
+  // Strip agent-injected wrappers so a restored user prompt reads cleanly.
+  function cleanUserText(t) {
+    return String(t || '')
+      .replace(/<ide_[a-z_]+>[\s\S]*?<\/ide_[a-z_]+>/g, '')
+      .replace(/<system-reminder>[\s\S]*?<\/system-reminder>/g, '')
+      .replace(/<command-[a-z-]+>[\s\S]*?<\/command-[a-z-]+>/g, '')
+      .replace(/<local-command-[a-z-]+>[\s\S]*?<\/local-command-[a-z-]+>/g, '')
+      .replace(/\[Image[^\]]*\]/g, '')
+      .trim();
+  }
+
+  // One clear, actionable card when Claude was blocked from using a tool.
+  function agDenialNotice(s, denials) {
     const tools = [...new Set(denials.map(d => d.tool_name).filter(Boolean))];
     if (!tools.length) tools.push('a tool');
     const list = tools.join(', ');
@@ -4180,139 +4441,152 @@
       ' blocked. Allow ' + (many ? 'them' : 'it') + ' for this session and Claude will retry automatically.'));
     const allowBtn = el('button', { class: 'perm-allow' }, 'Allow ' + list + ' & retry');
     allowBtn.addEventListener('click', () => {
-      tools.forEach(t => { if (/^[A-Za-z][A-Za-z0-9_]*$/.test(t) && !agent.allowedTools.includes(t)) agent.allowedTools.push(t); });
+      tools.forEach(t => { if (/^[A-Za-z][A-Za-z0-9_]*$/.test(t) && !s.allowedTools.includes(t)) s.allowedTools.push(t); });
       box.classList.add('answered');
       box.appendChild(el('div', { class: 'perm-detail' }, '→ allowed: ' + list + '. Retrying…'));
-      // Respawn so --allowedTools takes effect, keeping the session (resume),
-      // then re-send the last request so it just continues.
-      if (agent.ws) { try { agent.ws.close(); } catch {} }
-      agent.ws = null;
-      if (agent.lastUserText) agSendText(agent.lastUserText);
+      if (s.ws) { try { s.ws.close(); } catch {} }
+      s.ws = null;
+      if (s.lastUserText) agSendText(s, s.lastUserText);
     });
     const dismiss = el('button', { class: 'perm-deny' }, 'Not now');
     dismiss.addEventListener('click', () => box.classList.add('answered'));
     box.appendChild(el('div', { class: 'perm-actions' }, [allowBtn, dismiss]));
-    agAppend(box);
+    agAppend(s, box);
   }
 
-  // A visible "Claude is working…" row pinned to the bottom of the log while a
-  // turn runs, so it's obvious the AI is busy (status text alone was too quiet).
-  function agShowWorking() {
-    if (agent.working) return;
-    agent.working = el('div', { class: 'agent-working' }, [
+  // A visible "Claude is working…" row pinned to the bottom of the session's log.
+  function agShowWorking(s) {
+    if (s.working) return;
+    s.working = el('div', { class: 'agent-working' }, [
       el('span', { class: 'aw-dots', html: '<span></span><span></span><span></span>' }),
       el('span', { class: 'aw-label' }, 'Claude is working…'),
     ]);
-    agClearEmpty();
-    agLog().appendChild(agent.working);
-    agScroll(true);
+    agClearEmpty(s);
+    s.log.appendChild(s.working);
+    agScroll(s, true);
   }
-  function agHideWorking() {
-    if (agent.working) { agent.working.remove(); agent.working = null; }
+  function agHideWorking(s) {
+    if (s.working) { s.working.remove(); s.working = null; }
   }
-  // Keep the working row last as new messages stream in.
-  function agBumpWorking() {
-    if (agent.working && agent.working.parentNode) agLog().appendChild(agent.working);
+  function agBumpWorking(s) {
+    if (s.working && s.working.parentNode) s.log.appendChild(s.working);
   }
 
-  function agStartTurn() {
-    agent.running = true;
-    agent.stopping = false;
-    const btn = $('#agent-submit');
-    btn.classList.add('is-running');
-    btn.title = 'Stop (interrupt the current turn)';
-    setAgentStatus('working…', 'run');
-    agShowWorking();
+  function agStartTurn(s) {
+    s.running = true;
+    s.stopping = false;
+    s.started = true;
+    agShowWorking(s);
+    if (s === AS()) {
+      agent.running = true;
+      const btn = $('#agent-submit');
+      if (btn) { btn.classList.add('is-running'); btn.title = 'Stop (interrupt the current turn)'; }
+      setFooter('working…', 'run');
+    }
+    agRenderTabs();
   }
-  function agEndTurn() {
-    agent.running = false;
-    agHideWorking();
-    const btn = $('#agent-submit');
-    btn.classList.remove('is-running');
-    btn.title = 'Send (Enter)';
-    const pm = agent.mode;
-    setAgentStatus('ready · ' + (agent.model || '') + ' · ' + (MODE_LABELS[pm] || pm));
-    if (agent.queued) {
-      const q = agent.queued;
-      agent.queued = '';
-      agSendText(q);
+  function agEndTurn(s) {
+    s.running = false;
+    agHideWorking(s);
+    if (s === AS()) {
+      agent.running = false;
+      const btn = $('#agent-submit');
+      if (btn) { btn.classList.remove('is-running'); btn.title = 'Send (Enter)'; }
+      setFooter('ready · ' + (s.model || '') + ' · ' + (MODE_LABELS[s.mode] || s.mode));
+    }
+    agRenderTabs();
+    agPersist();
+    if (s.queued) {
+      const q = s.queued;
+      s.queued = '';
+      agSendText(s, q);
     }
   }
 
-  // ---- transport ----
-  function connectAgent() {
-    if (agent.ws && agent.ws.readyState <= 1) return;
+  // ---- transport (one WebSocket per session) ----
+  function connectAgent(s) {
+    if (s.ws && s.ws.readyState <= 1) return;
     const proto = location.protocol === 'https:' ? 'wss://' : 'ws://';
     const params = new URLSearchParams();
-    if (state.currentDoc) params.set('docPath', state.currentDoc.path);
+    // A bound/restored tab pins its own cwd; a fresh tab binds to the current
+    // selection on first connect.
+    if (s.cwd) params.set('cwd', s.cwd);
+    else if (state.currentDoc) params.set('docPath', state.currentDoc.path);
     else if (state.currentFolder) params.set('folderPath', state.currentFolder);
-    params.set('mode', agent.mode);
-    if (agent.sessionId) params.set('resume', agent.sessionId);
-    if (agent.allowedTools.length) params.set('allow', agent.allowedTools.join(','));
+    params.set('mode', s.mode);
+    if (s.sessionId) params.set('resume', s.sessionId);
+    if (s.allowedTools.length) params.set('allow', s.allowedTools.join(','));
 
-    const sel = state.currentDoc ? state.currentDoc.path
-              : state.currentFolder ? state.currentFolder : '';
-    agent.sessionWorkspace = splitWorkspacePath(sel).workspace
-      || (state.index && state.index.roots && state.index.roots[0] && state.index.roots[0].name) || '';
-    updateAgentContext();
+    if (!s.sessionWorkspace) {
+      const sel = state.currentDoc ? state.currentDoc.path
+                : state.currentFolder ? state.currentFolder : '';
+      s.sessionWorkspace = splitWorkspacePath(sel).workspace
+        || (state.index && state.index.roots && state.index.roots[0] && state.index.roots[0].name) || '';
+    }
+    if (s === AS()) updateAgentContext();
 
     const ws = new WebSocket(proto + location.host + '/agent?' + params.toString());
-    agent.ws = ws;
-    setAgentStatus('connecting…');
+    s.ws = ws;
+    agStatus(s, 'connecting…');
     ws.onmessage = (e) => {
       let m; try { m = JSON.parse(e.data); } catch { return; }
-      if (m.t === 'started') { agent.cwd = m.cwd || ''; if (!agent.running) setAgentStatus('connecting…'); }
-      else if (m.t === 'event') agHandleEvent(m.ev);
-      else if (m.t === 'error') { agSystem(m.message, true); agEndTurn(); }
+      if (m.t === 'started') { s.cwd = m.cwd || s.cwd; if (!s.running) agStatus(s, 'connecting…'); }
+      else if (m.t === 'event') agHandleEvent(s, m.ev);
+      else if (m.t === 'error') { agSystem(s, m.message, true); agEndTurn(s); }
       else if (m.t === 'exit') {
-        if (agent.stopping) {
-          agent.stopping = false;
-          agSystem('Stopped. Send another message to continue.');
+        if (s.stopping) {
+          s.stopping = false;
+          agSystem(s, 'Stopped. Send another message to continue.');
         } else {
-          agSystem('Session ended (code ' + (m.code == null ? '?' : m.code) + '). Send a message to resume, or click Restart.', m.code !== 0 && m.code != null);
+          agSystem(s, 'Session ended (code ' + (m.code == null ? '?' : m.code) + '). Send a message to resume, or click Restart.', m.code !== 0 && m.code != null);
         }
-        agEndTurn(); setAgentStatus('ready');
+        agEndTurn(s); agStatus(s, 'ready');
       }
     };
-    ws.onclose = () => { if (agent.ws === ws) { agent.ws = null; if (agent.running) agEndTurn(); } };
-    ws.onerror = () => setAgentStatus('connection error', 'error');
+    ws.onclose = () => { if (s.ws === ws) { s.ws = null; if (s.running) agEndTurn(s); } };
+    ws.onerror = () => agStatus(s, 'connection error', 'error');
   }
 
-  function agSendText(text) {
+  function agSendText(s, text) {
     const t = (text || '').trim();
     if (!t) return;
-    agent.lastUserText = t;
-    if (!agent.ws || agent.ws.readyState !== 1) connectAgent();
-    // If still connecting, wait until open.
+    s.lastUserText = t;
+    s.started = true;
+    if (!s.ws || s.ws.readyState !== 1) connectAgent(s);
     const fire = () => {
-      agent.ws.send(JSON.stringify({ t: 'input', text: t }));
-      agAppend(el('div', { class: 'msg msg-user' }, el('div', { class: 'msg-body' }, t)));
-      agStartTurn();
+      s.ws.send(JSON.stringify({ t: 'input', text: t }));
+      agUserBubble(s, t);
+      agStartTurn(s);
+      if (s.title === 'New chat') { s.title = t.replace(/\s+/g, ' ').slice(0, 40); agRenderTabs(); agPersist(); }
     };
-    if (agent.ws.readyState === 1) fire();
-    else agent.ws.addEventListener('open', fire, { once: true });
+    if (s.ws.readyState === 1) fire();
+    else s.ws.addEventListener('open', fire, { once: true });
   }
 
   function agSendFromComposer() {
+    const s = AS();
+    if (!s) return;
     const ta = $('#agent-input');
     const text = ta.value;
     if (!text.trim()) return;
     ta.value = '';
     autoGrowAgentInput();
-    if (agent.running) {
-      // queue (replace) the next turn until the current one finishes
-      agent.queued = (agent.queued ? agent.queued + '\n' : '') + text.trim();
-      setAgentStatus('queued — will send after this turn', 'run');
-      agAppend(el('div', { class: 'msg msg-user' }, el('div', { class: 'msg-body' }, text.trim())));
+    if (s.running) {
+      // queue the next turn until the current one finishes
+      s.queued = (s.queued ? s.queued + '\n' : '') + text.trim();
+      setFooter('queued — will send after this turn', 'run');
+      agUserBubble(s, text.trim());
       return;
     }
-    agSendText(text);
+    agSendText(s, text);
   }
 
   function agStop() {
-    agent.stopping = true;   // so the resulting exit reads as a deliberate stop
-    if (agent.ws && agent.ws.readyState === 1) agent.ws.send(JSON.stringify({ t: 'interrupt' }));
-    setAgentStatus('stopping…', 'run');
+    const s = AS();
+    if (!s) return;
+    s.stopping = true;   // so the resulting exit reads as a deliberate stop
+    if (s.ws && s.ws.readyState === 1) s.ws.send(JSON.stringify({ t: 'interrupt' }));
+    agStatus(s, 'stopping…', 'run');
   }
 
   const AGENT_INPUT_MAX = 160;
@@ -4322,22 +4596,293 @@
     ta.style.height = 'auto';
     const needed = ta.scrollHeight;
     ta.style.height = Math.min(AGENT_INPUT_MAX, needed) + 'px';
-    // Only show the scrollbar once the content actually exceeds the max height;
-    // while it's still growing the bar is useless and just clutters the box.
     ta.style.overflowY = needed > AGENT_INPUT_MAX ? 'auto' : 'hidden';
   }
 
+  // ---- tab strip ----
+  function agRenderTabs() {
+    const strip = $('#agent-tabs');
+    if (!strip) return;
+    strip.innerHTML = '';
+    for (const t of agent.tabs) {
+      const chip = el('div', {
+        class: 'agent-tab' + (t.id === agent.activeId ? ' active' : '') + (t.running ? ' running' : ''),
+        title: t.title || 'New chat',
+      });
+      if (t.running) chip.appendChild(el('span', { class: 'agent-tab-dot' }));
+      chip.appendChild(el('span', { class: 'agent-tab-label' }, t.title || 'New chat'));
+      const x = el('button', { class: 'agent-tab-close', title: 'Close tab', 'aria-label': 'Close tab' }, '✕');
+      x.addEventListener('click', (e) => { e.stopPropagation(); closeSession(t.id); });
+      chip.appendChild(x);
+      chip.addEventListener('click', () => switchSession(t.id));
+      strip.appendChild(chip);
+    }
+    const add = el('button', { class: 'agent-tab-new', title: 'New chat', 'aria-label': 'New chat' }, '+');
+    add.addEventListener('click', () => newSession());
+    strip.appendChild(add);
+  }
+
+  function agShowActivePane() {
+    const cont = $('#agent-log');
+    if (!cont) return;
+    for (const t of agent.tabs) {
+      if (t.log.parentNode !== cont) cont.appendChild(t.log);
+      t.log.style.display = (t.id === agent.activeId) ? 'flex' : 'none';
+    }
+  }
+
+  function agReflectActive() {
+    const s = AS();
+    agent.running = !!(s && s.running);
+    agShowActivePane();
+    agRenderTabs();
+    const modeSel = $('#agent-mode');
+    if (modeSel && s) modeSel.value = s.mode;
+    const btn = $('#agent-submit');
+    if (btn) {
+      btn.classList.toggle('is-running', !!(s && s.running));
+      btn.title = (s && s.running) ? 'Stop (interrupt the current turn)' : 'Send (Enter)';
+    }
+    if (!s) setFooter('idle');
+    else if (s.running) setFooter('working…', 'run');
+    else if (s.started || s.sessionId) setFooter('ready · ' + (s.model || '') + ' · ' + (MODE_LABELS[s.mode] || s.mode));
+    else setFooter('idle');
+    updateAgentContext();
+  }
+
+  // ---- persistence (survives reloads; restored tabs lazy-load their transcript) ----
+  // Primary window only — secondary windows (?w=1) keep their own ephemeral
+  // conversation so two windows don't fight over the same persisted tab set.
+  function agPersist() {
+    if (state.isSecondary) return;
+    try {
+      localStorage.setItem(AGENT_TABS_KEY, JSON.stringify({
+        seq: agent.seq,
+        activeId: agent.activeId,
+        tabs: agent.tabs.map(t => ({
+          id: t.id, title: t.title, sessionId: t.sessionId,
+          workspace: t.sessionWorkspace, cwd: t.cwd, mode: t.mode,
+          model: t.model, started: t.started,
+        })),
+      }));
+    } catch {}
+  }
+  function agRestorePersisted() {
+    if (state.isSecondary) return false;
+    let data;
+    try { data = JSON.parse(localStorage.getItem(AGENT_TABS_KEY) || 'null'); } catch { data = null; }
+    if (!data || !Array.isArray(data.tabs) || !data.tabs.length) return false;
+    agent.seq = data.seq || 0;
+    for (const t of data.tabs) {
+      const s = makeSession({
+        id: t.id, title: t.title, sessionId: t.sessionId, workspace: t.workspace,
+        cwd: t.cwd, mode: t.mode, model: t.model, started: t.started,
+        needsLoad: !!t.sessionId,
+      });
+      agSetEmpty(s);
+      agent.tabs.push(s);
+    }
+    agent.activeId = (data.activeId && agent.tabs.some(x => x.id === data.activeId))
+      ? data.activeId : agent.tabs[0].id;
+    // Keep the id counter ahead of any restored id so new tabs never collide.
+    agent.seq = Math.max(agent.seq, ...agent.tabs.map(t => parseInt(String(t.id).replace(/\D/g, ''), 10) || 0));
+    return true;
+  }
+
+  // ---- session lifecycle (tabs) ----
+  function newSession() {
+    const s = makeSession({});
+    agSetEmpty(s);
+    agent.tabs.push(s);
+    agent.activeId = s.id;
+    agReflectActive();
+    agPersist();
+    setTimeout(() => { const ta = $('#agent-input'); if (ta) ta.focus(); }, 0);
+    return s;
+  }
+  function switchSession(id) {
+    if (id === agent.activeId) return;
+    const s = agent.tabs.find(t => t.id === id);
+    if (!s) return;
+    agent.activeId = id;
+    agReflectActive();
+    agPersist();
+    if (s.needsLoad && s.sessionId) agLoadTranscript(s);
+    else agScroll(s, true);
+    setTimeout(() => { const ta = $('#agent-input'); if (ta) ta.focus(); }, 0);
+  }
+  function closeSession(id) {
+    const idx = agent.tabs.findIndex(t => t.id === id);
+    if (idx < 0) return;
+    const s = agent.tabs[idx];
+    if (s.running && !confirm('This conversation is still running. Close it anyway?')) return;
+    if (s.ws) { try { s.ws.close(); } catch {} }
+    if (s.log.parentNode) s.log.parentNode.removeChild(s.log);
+    agent.tabs.splice(idx, 1);
+    if (!agent.tabs.length) { newSession(); return; }
+    if (agent.activeId === id) {
+      const next = agent.tabs[idx] || agent.tabs[idx - 1];
+      agent.activeId = next.id;
+      agReflectActive();
+      const cur = AS();
+      if (cur && cur.needsLoad && cur.sessionId) agLoadTranscript(cur);
+    } else {
+      agRenderTabs();
+    }
+    agPersist();
+  }
+
+  // ---- #61: restore / continue a past conversation ----
+  async function agLoadTranscript(s) {
+    if (!s.sessionId) return;
+    s.needsLoad = false;
+    agSetLoading(s);
+    try {
+      const r = await fetch('/agent/session?id=' + encodeURIComponent(s.sessionId));
+      if (!r.ok) throw new Error('HTTP ' + r.status);
+      const data = await r.json();
+      s.model = data.model || s.model;
+      if (data.cwd) s.cwd = data.cwd;
+      if (!s.sessionWorkspace && data.workspace) s.sessionWorkspace = data.workspace;
+      agRenderTranscript(s, data.events || [], data.truncated);
+      if (s === AS()) agReflectActive();
+      agPersist();
+    } catch (err) {
+      s.log.innerHTML = '';
+      agSystem(s, 'Could not load this conversation: ' + (err && err.message || err), true);
+    }
+  }
+
+  function agRenderTranscript(s, events, truncated) {
+    s.log.innerHTML = '';
+    s.activeAssistant = null; s.activeText = ''; s.toolCards = {}; s.working = null;
+    if (truncated) agSystem(s, 'Showing the most recent part of this conversation.');
+    for (const ev of events) {
+      if (!ev || !ev.message) continue;
+      if (ev.type === 'assistant') {
+        const blocks = ev.message.content || [];
+        for (const b of blocks) {
+          if (!b) continue;
+          if (b.type === 'thinking') agThinking(s, b.thinking);
+          else if (b.type === 'text') agAssistantText(s, b.text);
+          else if (b.type === 'tool_use') {
+            if ((b.name || '').toLowerCase() === 'todowrite') agTodos(s, b.input);
+            else agToolCard(s, b);
+          }
+        }
+      } else if (ev.type === 'user') {
+        const c = ev.message.content;
+        if (typeof c === 'string') { const t = cleanUserText(c); if (t) agUserBubble(s, t); }
+        else if (Array.isArray(c)) {
+          const results = c.filter(b => b && b.type === 'tool_result');
+          if (results.length) results.forEach(rz => agAttachResult(s, rz.tool_use_id, rz.content, rz.is_error === true));
+          else {
+            const t = cleanUserText(c.filter(b => b && b.type === 'text').map(b => b.text || '').join('\n'));
+            if (t) agUserBubble(s, t);
+          }
+        }
+      }
+    }
+    if (!s.log.children.length) agSetEmpty(s);
+    s.started = true;
+    agScroll(s, true);
+  }
+
+  function agRelTime(ms) {
+    const diff = Date.now() - ms;
+    const sec = Math.round(diff / 1000);
+    if (sec < 60) return 'just now';
+    const min = Math.round(sec / 60);
+    if (min < 60) return min + 'm ago';
+    const hr = Math.round(min / 60);
+    if (hr < 24) return hr + 'h ago';
+    const day = Math.round(hr / 24);
+    if (day < 30) return day + 'd ago';
+    const mo = Math.round(day / 30);
+    if (mo < 12) return mo + 'mo ago';
+    return Math.round(mo / 12) + 'y ago';
+  }
+
+  function agRestoreSession(sess) {
+    const existing = agent.tabs.find(t => t.sessionId === sess.id);
+    if (existing) { switchSession(existing.id); return; }
+    const s = makeSession({
+      title: sess.title || 'Conversation',
+      sessionId: sess.id,
+      workspace: sess.workspace,
+      cwd: sess.cwd,
+      started: true,
+      needsLoad: true,
+    });
+    agSetEmpty(s);
+    agent.tabs.push(s);
+    agent.activeId = s.id;
+    agReflectActive();
+    agPersist();
+    agLoadTranscript(s);
+  }
+
+  async function agOpenHistory() {
+    const overlay = el('div', { class: 'agent-history-overlay', 'data-term-theme': agent.theme });
+    const modal = el('div', { class: 'agent-history-modal' });
+    const head = el('div', { class: 'agent-history-head' }, [
+      el('span', { class: 'agent-history-title' }, 'Past conversations'),
+      el('button', { class: 'agent-history-close', title: 'Close', 'aria-label': 'Close' }, '✕'),
+    ]);
+    const listWrap = el('div', { class: 'agent-history-list' }, el('div', { class: 'agent-history-empty' }, 'Loading…'));
+    modal.appendChild(head);
+    modal.appendChild(listWrap);
+    overlay.appendChild(modal);
+    document.body.appendChild(overlay);
+    const close = () => { try { overlay.remove(); } catch {} };
+    head.querySelector('.agent-history-close').addEventListener('click', close);
+    overlay.addEventListener('click', (e) => { if (e.target === overlay) close(); });
+    const onEsc = (e) => { if (e.key === 'Escape') { close(); document.removeEventListener('keydown', onEsc, true); } };
+    document.addEventListener('keydown', onEsc, true);
+
+    let sessions = [];
+    try {
+      const r = await fetch('/agent/sessions');
+      if (!r.ok) throw new Error('HTTP ' + r.status);
+      sessions = (await r.json()).sessions || [];
+    } catch (err) {
+      listWrap.innerHTML = '';
+      listWrap.appendChild(el('div', { class: 'agent-history-empty' }, 'Could not load history: ' + (err && err.message || err)));
+      return;
+    }
+    if (!sessions.length) {
+      listWrap.innerHTML = '';
+      listWrap.appendChild(el('div', { class: 'agent-history-empty' }, 'No past conversations found for these workspaces yet.'));
+      return;
+    }
+    listWrap.innerHTML = '';
+    for (const sess of sessions) {
+      const row = el('div', { class: 'agent-history-item' });
+      const main = el('div', { class: 'agent-history-item-main' }, [
+        el('div', { class: 'agent-history-item-title' }, sess.title || 'Conversation'),
+        el('div', { class: 'agent-history-item-preview' }, sess.preview || ''),
+      ]);
+      const meta = el('div', { class: 'agent-history-item-meta' }, [
+        el('span', { class: 'agent-history-item-ws' }, sess.workspace || ''),
+        el('span', {}, agRelTime(sess.mtime)),
+        el('span', {}, (sess.messages || 0) + ' turns'),
+      ]);
+      row.appendChild(main);
+      row.appendChild(meta);
+      row.addEventListener('click', () => { close(); document.removeEventListener('keydown', onEsc, true); agRestoreSession(sess); });
+      listWrap.appendChild(row);
+    }
+  }
+
   // ---- context / @-insert ----
-  // The session can access every mounted workspace (server adds --add-dir for
-  // all roots), so any selected file is insertable: a path relative to the
-  // session's cwd root when it lives there, an absolute path otherwise.
+  // The session can access every mounted workspace, so any selected file is
+  // insertable: a path relative to the session's cwd root when it lives there,
+  // an absolute path otherwise.
   function rootAbsPath(workspaceName) {
     const roots = (state.index && state.index.roots) || [];
     const r = roots.find(x => x.name === workspaceName);
     return r ? r.path : '';
   }
-  // Returns { insert, display } for the current selection, or null if nothing
-  // is selected / the path can't be resolved.
   function agentInsertInfo() {
     const full = state.currentDoc ? state.currentDoc.path
                : state.currentFolder ? state.currentFolder : '';
@@ -4345,7 +4890,8 @@
     const { workspace, rel } = splitWorkspacePath(full);
     const isFolder = !state.currentDoc;
     const slash = isFolder ? '/' : '';
-    if (agent.sessionWorkspace && workspace === agent.sessionWorkspace) {
+    const sw = (AS() && AS().sessionWorkspace) || '';
+    if (sw && workspace === sw) {
       const r = rel || '.';
       return { insert: r, display: r + slash };
     }
@@ -4397,6 +4943,42 @@
       const w = $('#agent-panel').getBoundingClientRect().width;
       document.body.style.setProperty('--agent-w', w + 'px');
     }
+    syncClaudePin();
+  }
+
+  // ---- #64: pin/dock the Claude panel beside the editor ----
+  // Unpinned (default) the panel floats over the editor as a drawer. Pinned, the
+  // page content reflows to the left of the panel: body.claude-pinned +
+  // --claude-dock-w (combined width of the open+pinned Claude panels) drive the
+  // margin-right on .tabbar/.main (see style.css). State persists across reloads.
+  const CLAUDE_PIN_KEY = 'clawdoc:claudePinned';
+  function isClaudePinned() {
+    try { return localStorage.getItem(CLAUDE_PIN_KEY) === '1'; } catch { return false; }
+  }
+  function syncClaudePin() {
+    const pinned = isClaudePinned();
+    let w = 0;
+    if (pinned) {
+      if (agent.open) { const p = $('#agent-panel'); if (p) w += p.getBoundingClientRect().width; }
+      if (chat.open)  { const p = $('#chat-panel');  if (p) w += p.getBoundingClientRect().width; }
+    }
+    const active = pinned && w > 0;
+    document.body.classList.toggle('claude-pinned', active);
+    document.body.style.setProperty('--claude-dock-w', (active ? w : 0) + 'px');
+  }
+  function updatePinButtons() {
+    const pinned = isClaudePinned();
+    ['#agent-pin', '#chat-pin'].forEach(sel => {
+      const b = $(sel);
+      if (!b) return;
+      b.classList.toggle('active', pinned);
+      b.title = pinned ? 'Unpin — float over the editor' : 'Pin — dock beside the editor';
+    });
+  }
+  function toggleClaudePin() {
+    try { localStorage.setItem(CLAUDE_PIN_KEY, isClaudePinned() ? '0' : '1'); } catch {}
+    updatePinButtons();
+    syncClaudePin();
   }
 
   // ---- lifecycle ----
@@ -4404,19 +4986,24 @@
     if (agent.initialized) return;
     agent.initialized = true;
     applyAgentTheme(agent.theme);
-    agClear();
-    // Lazy: don't spawn a claude process just because the panel opened. claude
-    // stays silent (no system/init) until the first user message, so connecting
-    // early would leave the footer stuck on "starting…". We connect on the
-    // first send instead (agSendText -> connectAgent).
-    setAgentStatus('idle');
+    // Lazy: don't spawn a claude process just because the panel opened — claude
+    // stays silent until the first user message. Restore any persisted tabs; the
+    // active one lazy-loads its transcript, others load when first activated.
+    const restored = agRestorePersisted();
+    if (!restored) {
+      newSession();
+    } else {
+      agReflectActive();
+      const s = AS();
+      if (s && s.needsLoad && s.sessionId) agLoadTranscript(s);
+    }
   }
   function openAgent() {
     agent.open = true;
     $('#agent-panel').classList.remove('hidden');
     if (getClaudeClient() === 'agent') $('#claude-toggle').classList.add('active');
-    updateAgentContext();
     ensureAgent();
+    updateAgentContext();
     syncBothClaude();
     setTimeout(() => { $('#agent-input') && $('#agent-input').focus(); }, 0);
   }
@@ -4427,14 +5014,30 @@
     syncBothClaude();
   }
   function toggleAgent() { agent.open ? closeAgent() : openAgent(); }
+
+  // Restart = reset the ACTIVE conversation (fresh Claude session, cleared log),
+  // leaving other tabs untouched.
   function restartAgent() {
-    if (agent.ws) { try { agent.ws.close(); } catch {} }
-    agent.ws = null;
-    agent.sessionId = '';   // fresh conversation
-    agent.running = false;
-    agClear();
-    // Stay lazy — a fresh process spawns on the next message, not now.
-    setAgentStatus('idle');
+    const s = AS();
+    if (!s) { newSession(); return; }
+    if (s.ws) { try { s.ws.close(); } catch {} }
+    s.ws = null;
+    s.sessionId = '';
+    s.running = false;
+    s.stopping = false;
+    s.model = '';
+    s.started = false;
+    s.needsLoad = false;
+    s.toolCards = {};
+    s.activeAssistant = null;
+    s.activeText = '';
+    s.queued = '';
+    s.allowedTools = [];
+    s.working = null;
+    s.title = 'New chat';
+    agSetEmpty(s);
+    agReflectActive();
+    agPersist();
   }
   function isAgentFocused() {
     const p = $('#agent-panel');
@@ -4471,13 +5074,17 @@
     $('#agent-close').addEventListener('click', closeAgent);
     $('#agent-restart').addEventListener('click', restartAgent);
     $('#agent-theme').addEventListener('click', () => applyAgentTheme(agent.theme === 'dark' ? 'light' : 'dark'));
-    $('#agent-submit').addEventListener('click', () => { agent.running ? agStop() : agSendFromComposer(); });
+    $('#agent-pin').addEventListener('click', toggleClaudePin);
+    $('#agent-history').addEventListener('click', agOpenHistory);
+    $('#agent-submit').addEventListener('click', () => { const s = AS(); (s && s.running) ? agStop() : agSendFromComposer(); });
     $('#agent-insert').addEventListener('click', agentInsertPath);
     $('#agent-context').addEventListener('click', () => { if ($('#agent-context').hasAttribute('data-insertable')) agentInsertPath(); });
     const modeSel = $('#agent-mode');
-    modeSel.value = agent.mode;
+    modeSel.value = DEFAULT_AGENT_MODE;
     modeSel.addEventListener('change', () => {
-      agent.mode = modeSel.value;
+      const s = AS();
+      if (!s) return;
+      s.mode = modeSel.value;
       // mode changes apply on the next session; restart to take effect now
       restartAgent();
     });
@@ -6509,9 +7116,11 @@
     $('#chat-close').addEventListener('click', closeChat);
     $('#chat-restart').addEventListener('click', restartChat);
     $('#chat-theme').addEventListener('click', toggleTermTheme);
+    $('#chat-pin').addEventListener('click', toggleClaudePin);
     $('#chat-context').addEventListener('click', insertCurrentPathIntoTerminal);
     $('#chat-insert').addEventListener('click', insertCurrentPathIntoTerminal);
     applyTermTheme(chat.theme); // set initial data-term-theme on the panel
+    updatePinButtons();
     initChatResize();
 
     // rich Claude client (structured, stream-json) — 2nd button
@@ -6543,7 +7152,7 @@
     // Browser-level prompt if the user tries to close the tab with unsaved
     // edits (the browser ignores the custom message but still shows a prompt).
     window.addEventListener('beforeunload', (ev) => {
-      if (state.editor && isEditorDirty()) {
+      if ((state.editor && isEditorDirty()) || isCodeEditorDirty()) {
         ev.preventDefault();
         ev.returnValue = '';
       }
