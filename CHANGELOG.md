@@ -6,6 +6,18 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [0.3.2] — 2026-07-24
+
+### Added
+- Multiple Claude chat tabs (#63): the rich client holds several independent conversations at once — each with its own stream, message log, and session — with a tab strip to open (`+`), switch and close them. Open tabs persist across reloads.
+- Restore past conversations (#61): a "Past conversations" picker lists recent Claude sessions (title, preview, workspace, time) and re-opens one as a tab, rendering its transcript and continuing it via `--resume`. Backed by `/agent/sessions` and `/agent/session`.
+- Editable text and source files (#62): `.json`, `.yaml`, `.txt`, and common code formats now open in an in-app CodeMirror editor (with a plain-textarea fallback) wired into the existing Save/Close and dirty-navigation guard; invalid JSON is flagged before save.
+- Pin/dock the Claude panel (#64): a pin toggle docks the panel beside the editor so it reflows the content instead of overlaying it; unpinned keeps the overlay drawer. State persists.
+
+### Fixed
+- Deck "Export PDF" now works in the packaged app. The viewer rendered decks in a sandboxed iframe without `allow-downloads`, so Chromium silently blocked the export (jsPDF `pdf.save()`); added the flag to the viewer iframes and a `will-download` handler that saves to `~/Downloads` via a Save dialog.
+- Claude conversation rows no longer compress into thin unreadable bars as the transcript grows (#60): message/tool-call rows keep their natural height so the log scrolls instead.
+
 ## [0.3.1] — 2026-07-21
 
 ### Fixed
