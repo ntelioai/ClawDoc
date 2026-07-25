@@ -560,6 +560,8 @@ body.fileop-busy [data-pane-tree] { cursor: progress; }
   display: flex;
   flex-direction: column;
   background: var(--bg);
+  container-type: inline-size;
+  container-name: docarea;
 }
 .breadcrumb {
   height: 40px;
@@ -572,8 +574,27 @@ body.fileop-busy [data-pane-tree] { cursor: progress; }
   color: var(--text-muted);
   background: var(--bg-elev);
   flex-shrink: 0;
+  overflow: hidden;
+}
+/* Path crumbs scroll/truncate within their own box (collapsing first) so the
+   action buttons stay visible when the content area narrows. */
+.crumb-path {
+  flex: 1 1 0;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 6px;
   overflow-x: auto;
   white-space: nowrap;
+  scrollbar-width: none;
+}
+.crumb-path::-webkit-scrollbar { display: none; }
+/* When the content area gets narrow (small window, or the Claude panel pinned),
+   drop the secondary actions so the essential ones (reload/history/edit and the
+   editor's Save/Close) stay visible. */
+@container docarea (max-width: 660px) {
+  /* specificity must beat `.crumb-actions .icon-btn { display: inline-flex }` */
+  .crumb-actions button.crumb-secondary { display: none; }
 }
 .crumb {
   cursor: pointer;
@@ -584,10 +605,15 @@ body.fileop-busy [data-pane-tree] { cursor: progress; }
 .crumb.current { color: var(--text); font-weight: 500; }
 .crumb-sep { color: var(--text-dim); }
 .crumb-actions {
-  margin-left: auto;
+  flex: 0 1 auto;
+  min-width: 0;
+  margin-left: 8px;
   display: flex;
   gap: 8px;
+  overflow-x: auto;          /* last-resort scroll if even the essentials overflow */
+  scrollbar-width: none;
 }
+.crumb-actions::-webkit-scrollbar { display: none; }
 .crumb-actions button {
   height: 26px;
   padding: 0 10px;
@@ -1691,6 +1717,10 @@ mark.hl { background: #ffe9a8; color: inherit; padding: 0 1px; border-radius: 2p
   letter-spacing: 0.02em;
   color: var(--tp-accent);
   white-space: nowrap;
+  flex-shrink: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 .chat-context {
   flex: 1;
@@ -1719,7 +1749,12 @@ mark.hl { background: #ffe9a8; color: inherit; padding: 0 1px; border-radius: 2p
 .chat-panel[data-term-theme="light"] .chat-context[data-insertable]:hover {
   background: rgba(0,0,0,0.04);
 }
-.chat-head-actions { display: flex; gap: 6px; }
+/* Header actions: the mode <select> shrinks first; the buttons never shrink or
+   clip, so at narrow panel widths you still get every control (the wide select
+   just truncates). */
+.chat-head-actions { display: flex; gap: 6px; flex-shrink: 1; min-width: 0; }
+.chat-head-actions button { flex-shrink: 0; }
+.agent-mode { flex-shrink: 1; min-width: 3ch; }
 .chat-head-actions button {
   height: 24px;
   padding: 0 10px;

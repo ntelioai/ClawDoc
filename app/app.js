@@ -1184,12 +1184,16 @@
   function renderBreadcrumb() {
     const bc = $('#breadcrumb');
     bc.innerHTML = '';
+    // The clickable path crumbs live in their own shrinkable/scrollable box so
+    // that when the content area narrows (e.g. the Claude panel is pinned) the
+    // path truncates instead of pushing the action buttons off the right edge.
+    const path = el('div', { class: 'crumb-path' });
     const rootLabel = (state.index && state.index.roots && state.index.roots.length === 1)
       ? state.index.roots[0].name
       : 'Workspaces';
     const root = el('a', { class: 'crumb', href: '#folder=' }, rootLabel);
     root.addEventListener('click', (ev) => { ev.preventDefault(); selectFolder(''); });
-    bc.appendChild(root);
+    path.appendChild(root);
     const segments = [];
     if (state.currentDoc) {
       const folder = state.currentDoc.folder === '.' ? '' : state.currentDoc.folder;
@@ -1199,26 +1203,27 @@
     }
     let acc = '';
     segments.forEach((seg, i) => {
-      bc.appendChild(el('span', { class: 'crumb-sep' }, '/'));
+      path.appendChild(el('span', { class: 'crumb-sep' }, '/'));
       acc = acc ? acc + '/' + seg : seg;
       const c = el('a', { class: 'crumb', href: '#folder=' + encodeURIComponent(acc) }, seg);
       const accSnap = acc;
       c.addEventListener('click', (ev) => { ev.preventDefault(); selectFolder(accSnap); });
-      bc.appendChild(c);
+      path.appendChild(c);
     });
     if (state.currentDoc) {
-      bc.appendChild(el('span', { class: 'crumb-sep' }, '/'));
-      bc.appendChild(el('span', { class: 'crumb current' }, state.currentDoc.title || state.currentDoc.name));
+      path.appendChild(el('span', { class: 'crumb-sep' }, '/'));
+      path.appendChild(el('span', { class: 'crumb current' }, state.currentDoc.title || state.currentDoc.name));
     }
+    bc.appendChild(path);
     // actions
     const actions = el('div', { class: 'crumb-actions' });
     if (state.currentDoc) {
-      const reveal = el('button', { title: 'Reveal in Finder' }, 'Reveal');
+      const reveal = el('button', { class: 'crumb-secondary', title: 'Reveal in Finder' }, 'Reveal');
       reveal.addEventListener('click', () => {
         fetch('/api/open?path=' + encodeURIComponent(state.currentDoc.path)).catch(()=>{});
       });
       actions.appendChild(reveal);
-      const copy = el('button', { title: 'Copy workspace-relative path' }, 'Copy path');
+      const copy = el('button', { class: 'crumb-secondary', title: 'Copy workspace-relative path' }, 'Copy path');
       copy.addEventListener('click', () => {
         navigator.clipboard.writeText(state.currentDoc.path);
         copy.textContent = 'Copied';
@@ -1237,18 +1242,18 @@
         setTimeout(() => { reload.innerHTML = ICON_REFRESH; reload.classList.remove('ok'); }, 900);
       });
       actions.appendChild(reload);
-      const zOut = el('button', { class: 'icon-btn', title: 'Zoom out (⌘−)' });
+      const zOut = el('button', { class: 'icon-btn crumb-secondary', title: 'Zoom out (⌘−)' });
       zOut.innerHTML = ICON_ZOOM_OUT;
       zOut.addEventListener('click', zoomOut);
       actions.appendChild(zOut);
-      const zLabel = el('button', { class: 'icon-btn zoom-label', title: 'Reset zoom (⌘0)' }, Math.round(state.zoom * 100) + '%');
+      const zLabel = el('button', { class: 'icon-btn zoom-label crumb-secondary', title: 'Reset zoom (⌘0)' }, Math.round(state.zoom * 100) + '%');
       zLabel.addEventListener('click', zoomReset);
       actions.appendChild(zLabel);
-      const zIn = el('button', { class: 'icon-btn', title: 'Zoom in (⌘+)' });
+      const zIn = el('button', { class: 'icon-btn crumb-secondary', title: 'Zoom in (⌘+)' });
       zIn.innerHTML = ICON_ZOOM_IN;
       zIn.addEventListener('click', zoomIn);
       actions.appendChild(zIn);
-      const fs = el('button', { class: 'icon-btn', title: 'Fullscreen (Esc to exit)' });
+      const fs = el('button', { class: 'icon-btn crumb-secondary', title: 'Fullscreen (Esc to exit)' });
       fs.innerHTML = ICON_FULLSCREEN;
       fs.addEventListener('click', toggleFullscreen);
       actions.appendChild(fs);
@@ -4093,6 +4098,9 @@
       startX = e.clientX;
       startW = panel.getBoundingClientRect().width;
       document.body.style.cursor = 'ew-resize';
+      // Disable iframe/embed pointer-events so the drag isn't lost when the
+      // cursor passes over a deck/PDF/HTML iframe in the viewer.
+      document.body.classList.add('resizing-split');
       e.preventDefault();
     });
     window.addEventListener('mousemove', (e) => {
@@ -4106,6 +4114,7 @@
       if (!dragging) return;
       dragging = false;
       document.body.style.cursor = '';
+      document.body.classList.remove('resizing-split');
       try { chat.fit && chat.fit.fit(); } catch {}
       sendResize();
       syncClaudePin();
@@ -5130,6 +5139,9 @@
       dragging = true; startX = e.clientX;
       startW = panel.getBoundingClientRect().width;
       document.body.style.cursor = 'ew-resize';
+      // Disable iframe/embed pointer-events so the drag survives crossing a
+      // deck/PDF/HTML iframe in the viewer.
+      document.body.classList.add('resizing-split');
       e.preventDefault();
     });
     window.addEventListener('mousemove', (e) => {
@@ -5141,6 +5153,7 @@
     window.addEventListener('mouseup', () => {
       if (!dragging) return;
       dragging = false; document.body.style.cursor = '';
+      document.body.classList.remove('resizing-split');
       syncBothClaude();
     });
   }
