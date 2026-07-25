@@ -713,7 +713,10 @@ body.fullscreen::before {
   display: flex;
   flex-direction: row;
 }
-.viewer-split > .viewer { min-width: 0; }
+.viewer-split > .viewer { min-width: 0; position: relative; }
+/* Click-to-focus overlay for an inactive pane whose iframe/embed (HTML deck,
+   PDF) would otherwise swallow the click. Removed on the active pane. */
+.pane-focus-overlay { position: absolute; inset: 0; z-index: 5; cursor: pointer; background: transparent; }
 .split-divider {
   flex: 0 0 6px;
   cursor: col-resize;
@@ -765,6 +768,10 @@ body.fullscreen::before {
 }
 .split-pane-btn:hover { color: var(--text); border-color: var(--accent); }
 .split-pane-body { flex: 1 1 auto; min-height: 0; overflow: auto; position: relative; }
+/* Full-height iframe/embed previews work in either pane host (#viewer as the
+   left split pane, or #split-pane-body as the right). */
+.viewer-split > .viewer > .preview-iframe,
+.viewer-split > .viewer > .preview-pdf,
 .split-pane-body > .preview-iframe,
 .split-pane-body > .preview-pdf { width: 100%; height: 100%; border: 0; }
 /* Active-pane focus ring — which pane a tree click / Edit acts on. Only while

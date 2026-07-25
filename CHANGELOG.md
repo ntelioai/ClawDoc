@@ -6,6 +6,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Added
+- HTML files (`.html`/`.htm`, e.g. decks) are now editable: the viewer's **Edit** button opens the HTML source in the CodeMirror editor (with `htmlmixed` highlighting) and saves it back verbatim. Works in single-pane and in either split pane. `/api/save` now accepts `.html`/`.htm`, and its size cap was raised to 25 MB for large inlined decks.
+- Split view: an inactive pane showing an `<iframe>`/`<embed>` (HTML deck, PDF) — which otherwise swallows clicks — now gets a transparent click-to-focus overlay, so you can activate and edit it.
+
 ### Changed
 - Split view (#50) reworked from a tab-coupled read-only companion into two real document panes. It now opens immediately (no need for a second tab); click a pane to make it active (focus ring); a tree click opens the file in the active pane. Both panes render read-only by default and the single editor "follows" the active pane — click Edit to edit either side (markdown, text/code, Word and spreadsheets). Only one editor is ever live, so there's no remount jank on navigation; clicking Edit in one pane while the other has unsaved changes prompts to Save / Discard / Cancel. The ⇄ button swaps the two panes.
 

@@ -1278,8 +1278,8 @@
         const edit = el('button', { class: 'btn-accent', title: 'Edit in WYSIWYG editor' }, 'Edit');
         edit.addEventListener('click', () => startEditing(state.currentDoc));
         actions.appendChild(edit);
-      } else if (!isMd && !state.editorBar && kind === 'text') {
-        const edit = el('button', { class: 'btn-accent', title: 'Edit as plain text' }, 'Edit');
+      } else if (!isMd && !state.editorBar && (kind === 'text' || kind === 'html')) {
+        const edit = el('button', { class: 'btn-accent', title: kind === 'html' ? 'Edit HTML source' : 'Edit as plain text' }, 'Edit');
         edit.addEventListener('click', () => startEditingText(state.currentDoc));
         actions.appendChild(edit);
       }
@@ -5800,6 +5800,27 @@
       viewer.classList.remove('pane-active');
       pane.classList.remove('pane-active');
     }
+    syncPaneOverlays();
+  }
+
+  // An <iframe>/<embed> (HTML deck, PDF) swallows mouse events, so clicking such
+  // a pane never reaches our pane-focus handler. Cover an INACTIVE iframe/embed
+  // pane with a transparent overlay whose click activates the pane; the active
+  // pane has no overlay, so its content is fully interactive.
+  function syncPaneOverlays() {
+    ['left', 'right'].forEach(pane => {
+      const host = paneHostEl(pane);
+      if (!host) return;
+      let ov = host.querySelector(':scope > .pane-focus-overlay');
+      const needs = state.split.on && state.split.active !== pane && !!host.querySelector(':scope > iframe, :scope > embed, :scope > .html-frame-wrap, :scope > .pdf-frame-wrap');
+      if (needs && !ov) {
+        ov = el('div', { class: 'pane-focus-overlay', title: 'Click to focus this pane' });
+        ov.addEventListener('pointerdown', (e) => { e.preventDefault(); setActivePane(pane); });
+        host.appendChild(ov);
+      } else if (!needs && ov) {
+        ov.remove();
+      }
+    });
   }
 
   // Render a pane's doc READ-ONLY into its host. Never touches the other pane.
@@ -5820,6 +5841,7 @@
       // the pane hasn't since been switched into edit mode.
       isWanted: () => state.split.on && state.split[pane + 'Path'] === d.path && state.editorPane !== pane,
     });
+    syncPaneOverlays();
   }
 
   // Focus a pane (click). Lightweight: no re-render — just move focus, sync the
@@ -5860,7 +5882,7 @@
   // is off in split — everything opens read-only first, Edit mounts the editor).
   function editableKind(doc) {
     const k = docKind(doc);
-    return k === 'markdown' || k === 'text' || k === 'docx' || k === 'sheet';
+    return k === 'markdown' || k === 'text' || k === 'docx' || k === 'sheet' || k === 'html';
   }
   // Mount the editor for the active pane's doc, guarding the OTHER pane's editor.
   async function editActivePane() {
@@ -5881,9 +5903,10 @@
     const bust = '_ts=' + Date.now();
     if (k === 'sheet') await renderSpreadsheet(d, host, bust);
     else if (k === 'docx') await renderDocx(d, host, bust);
-    else if (k === 'text') await startEditingText(d, host);
+    else if (k === 'text' || k === 'html') await startEditingText(d, host);
     else await startEditing(d, host);
     applySplitLayout();
+    syncPaneOverlays();
   }
   // Save/Discard/Cancel the editor living in the non-active pane, then restore
   // that pane to a read-only view. Returns false if the user cancels.

@@ -596,13 +596,14 @@ function handleSave(req, res, query) {
     '.xml', '.toml', '.ini', '.cfg', '.conf', '.log', '.js', '.mjs', '.cjs', '.ts',
     '.tsx', '.jsx', '.css', '.scss', '.less', '.py', '.rb', '.go', '.rs', '.java',
     '.c', '.h', '.cpp', '.hpp', '.cc', '.cs', '.php', '.sh', '.bash', '.zsh', '.sql',
-    '.r', '.lua', '.pl', '.swift', '.kt', '.dart', '.vue', '.svelte'];
+    '.r', '.lua', '.pl', '.swift', '.kt', '.dart', '.vue', '.svelte',
+    '.html', '.htm'];  // HTML edits as source in the code editor
   const SAVEABLE = new Set(['.md', '.markdown', '.csv', '.xlsx', '.docx', ...TEXT_SAVEABLE]);
   if (!SAVEABLE.has(ext)) {
     return sendText(res, 400, '{"error":"this file type is read-only and cannot be saved"}', 'application/json');
   }
 
-  const MAX = 10 * 1024 * 1024; // 10 MB cap (covers xlsx/docx binaries too)
+  const MAX = 25 * 1024 * 1024; // 25 MB cap (xlsx/docx binaries + large inlined HTML decks)
   const chunks = [];
   let size = 0;
   req.on('data', (chunk) => {
