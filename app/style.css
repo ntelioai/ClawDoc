@@ -767,6 +767,11 @@ body.fullscreen::before {
 .split-pane-body { flex: 1 1 auto; min-height: 0; overflow: auto; position: relative; }
 .split-pane-body > .preview-iframe,
 .split-pane-body > .preview-pdf { width: 100%; height: 100%; border: 0; }
+/* Active-pane focus ring — which pane a tree click / Edit acts on. Only while
+   split is on (applySplitLayout toggles .pane-active). Inset so it doesn't shift
+   layout; painted on the padding box so it doesn't scroll with content. */
+.viewer-split > .pane-active { box-shadow: inset 0 0 0 2px var(--accent); position: relative; z-index: 1; }
+.split-pane.pane-active { border-left-color: var(--accent); }
 body.resizing-split { cursor: col-resize; user-select: none; }
 body.resizing-split iframe,
 body.resizing-split embed { pointer-events: none; } /* don't lose the drag over an iframe */

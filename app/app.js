@@ -55,9 +55,12 @@
   // the existing render code keeps working unchanged.
   state.tabs = [];
   state.activeTabId = null;
-  // #50 — split view: a read-only companion pane to the right of the main
-  // viewer, showing another tab's doc. { on, ratio (left-pane fraction), tabId }.
-  state.split = { on: false, ratio: 0.5, tabId: null };
+  // #50 — split view: two side-by-side document panes. Both render read-only by
+  // default; the active pane is where tree-clicks land and where the single
+  // editor mounts on Edit. { on, ratio (left fraction), active, leftPath, rightPath }.
+  state.split = { on: false, ratio: 0.5, active: 'left', leftPath: null, rightPath: null };
+  // Which pane ('left'|'right') currently hosts the live editor, or null.
+  state.editorPane = null;
   state.isEmbed = false;
   // #26 — secondary windows (opened via "Open/Move to new window", marked with
   // ?w=1) persist their tab/UI state to per-window sessionStorage instead of the
@@ -399,6 +402,46 @@
     uiDialog({ message, title: opts.title, danger: opts.kind === 'danger', input: {
       value, placeholder: opts.placeholder || '', okLabel: opts.okLabel, cancelLabel: opts.cancelLabel,
     } });
+
+  // Multi-button chooser (e.g. Save / Discard / Cancel). Resolves to the chosen
+  // button's label, or null if dismissed (Esc / backdrop). The last button is
+  // treated as the "cancel"/dismiss action; the first as the primary.
+  function uiChoice(title, message, buttons) {
+    return new Promise(resolve => {
+      const lastFocus = document.activeElement;
+      const overlay = el('div', { class: 'ui-dialog-overlay' });
+      const panel = el('div', { class: 'ui-dialog-panel', role: 'dialog', 'aria-modal': 'true' });
+      if (title) panel.appendChild(el('div', { class: 'ui-dialog-title' }, title));
+      if (message) panel.appendChild(el('div', { class: 'ui-dialog-message' }, message));
+      let settled = false;
+      const close = (val) => {
+        if (settled) return;
+        settled = true;
+        document.removeEventListener('keydown', onKey, true);
+        overlay.remove();
+        try { if (lastFocus && lastFocus.focus) lastFocus.focus(); } catch {}
+        resolve(val);
+      };
+      const cancelLabel = buttons[buttons.length - 1];
+      const actions = el('div', { class: 'ui-dialog-actions' });
+      buttons.forEach((label, i) => {
+        const btn = el('button', { class: 'ui-dialog-btn' + (i === 0 ? ' ui-dialog-btn-primary' : '') }, label);
+        btn.addEventListener('click', () => close(label));
+        actions.appendChild(btn);
+      });
+      panel.appendChild(actions);
+      const onKey = (ev) => {
+        if (ev.key === 'Escape') { ev.preventDefault(); ev.stopPropagation(); close(cancelLabel); }
+        else if (ev.key === 'Enter') { ev.preventDefault(); ev.stopPropagation(); close(buttons[0]); }
+      };
+      document.addEventListener('keydown', onKey, true);
+      overlay.addEventListener('mousedown', (ev) => { if (ev.target === overlay) close(cancelLabel); });
+      overlay.appendChild(panel);
+      document.body.appendChild(overlay);
+      const first = actions.querySelector('.ui-dialog-btn-primary');
+      if (first) first.focus();
+    });
+  }
 
   // ---------- toasts (non-blocking feedback for file operations) ----------
   // A single bottom-centre stack. fileOpToast() shows a spinner the instant an
@@ -961,6 +1004,14 @@
 
   // ---------- selection / routing ----------
   function selectFolder(folderPath, pushHash = true) {
+    // In split view the panes stay put; a folder click just navigates the tree
+    // (files are opened into the active pane via selectDoc).
+    if (state.split.on) {
+      state.currentFolder = folderPath;
+      expandAncestorsOf(folderPath);
+      renderTree();
+      return;
+    }
     if (!confirmDiscardEdits()) return;
     state.currentDoc = null;
     state.currentFolder = folderPath;
@@ -981,6 +1032,28 @@
     const doc = state.docsByPath.get(docPath);
     if (!doc) {
       renderEmpty('Document not found in index: <code>' + escapeHtml(docPath) + '</code>');
+      return;
+    }
+    // Split view: a tree click opens the doc in the ACTIVE pane (read-only),
+    // decoupled from tabs/hash. If that pane is mid-edit, guard first.
+    if (state.split.on) {
+      const pane = state.split.active;
+      if (state.editorPane === pane) {
+        if (!confirmDiscardEdits()) return;
+        disposeLiveEditor();
+        state.editorPane = null;
+      }
+      state.split[pane + 'Path'] = docPath;
+      state.currentDoc = doc;
+      state.currentFolder = doc.folder === '.' ? '' : doc.folder;
+      expandFolderAndAncestors(state.currentFolder);
+      renderTree();
+      renderBreadcrumb();
+      renderPaneReadonly(pane);
+      applySplitLayout();
+      persistSplit();
+      if (typeof updateChatContext === 'function') updateChatContext();
+      if (typeof updateAgentContext === 'function') updateAgentContext();
       return;
     }
     // Allow re-selecting the same doc (e.g. tab switch back) without prompting.
@@ -1189,13 +1262,23 @@
         actions.appendChild(histBtn);
       }
       // Hide "Edit" while an editor is already open — its Save/Close take over
-      // in the editor cluster. Markdown opens the WYSIWYG editor; plain-text
-      // formats (json/yaml/txt/code) open the CodeMirror text editor.
-      if (isMd && !state.editorBar) {
+      // in the editor cluster. In split view the button edits the ACTIVE pane
+      // (docx/sheet included, since split renders them read-only first); in
+      // single-pane, markdown → WYSIWYG, plain-text → CodeMirror (docx/sheet
+      // already auto-open their editor via renderDoc, so no button is needed).
+      const kind = docKind(state.currentDoc);
+      if (state.split.on) {
+        const editingHere = state.editorPane === state.split.active;
+        if (editableKind(state.currentDoc) && !editingHere) {
+          const edit = el('button', { class: 'btn-accent', title: 'Edit in the active pane' }, 'Edit');
+          edit.addEventListener('click', () => editActivePane());
+          actions.appendChild(edit);
+        }
+      } else if (isMd && !state.editorBar) {
         const edit = el('button', { class: 'btn-accent', title: 'Edit in WYSIWYG editor' }, 'Edit');
         edit.addEventListener('click', () => startEditing(state.currentDoc));
         actions.appendChild(edit);
-      } else if (!isMd && !state.editorBar && docKind(state.currentDoc) === 'text') {
+      } else if (!isMd && !state.editorBar && kind === 'text') {
         const edit = el('button', { class: 'btn-accent', title: 'Edit as plain text' }, 'Edit');
         edit.addEventListener('click', () => startEditingText(state.currentDoc));
         actions.appendChild(edit);
@@ -3382,7 +3465,7 @@
     if (state.editorBar && state.editorBar.kind === 'md') clearEditorBar();
   }
 
-  async function startEditing(doc) {
+  async function startEditing(doc, host) {
     if (!doc) return;
     if (typeof toastui === 'undefined' || !toastui.Editor) {
       uiAlert('Editor failed to load — check network/CDN access.');
@@ -3400,7 +3483,7 @@
       return;
     }
 
-    const viewer = $('#viewer');
+    const viewer = host || $('#viewer');
     viewer.innerHTML = '';
     const wrap = el('div', { class: 'doc-edit' });
 
@@ -3440,12 +3523,7 @@
 
     cancelBtn.addEventListener('click', () => {
       if (!confirmDiscardEdits()) return;
-      // Reload so iframes/embeds (HTML, PDF) fetch the freshly saved file
-      // instead of the browser-cached pre-edit copy, and use the fresh doc
-      // reference if the index already refreshed (front-matter / backlinks
-      // may have changed).
-      const fresh = state.docsByPath.get(doc.path) || doc;
-      renderDoc(fresh, '', { reload: true });
+      exitEditor(doc);
     });
 
     const doSave = async () => {
@@ -3587,7 +3665,7 @@
     catch (err) { return { ok: false, error: err.message }; }
   }
 
-  async function startEditingText(doc) {
+  async function startEditingText(doc, host) {
     if (!doc) return;
     if ((state.editor || state.codeEditor || isSheetDirty() || isDocxDirty()) && !confirmDiscardEdits()) return;
 
@@ -3601,7 +3679,7 @@
       return;
     }
 
-    const viewer = $('#viewer');
+    const viewer = host || $('#viewer');
     viewer.innerHTML = '';
     const wrap = el('div', { class: 'doc-edit' });
     const status = el('span', { class: 'editor-status' });
@@ -3651,8 +3729,7 @@
 
     cancelBtn.addEventListener('click', () => {
       if (!confirmDiscardEdits()) return;
-      const fresh = state.docsByPath.get(doc.path) || doc;
-      renderDoc(fresh, '', { reload: true });
+      exitEditor(doc);
     });
 
     const doSave = async () => {
@@ -5663,31 +5740,43 @@
   let _previewSuperdoc = null;
   // The split-view companion pane (#50) renders read-only via the same engine
   // and likewise owns its own docx instance, independent of both above.
-  let _splitSuperdoc = null;
-
   // ---------- split view (#50) ----------
-  // The right pane is a read-only companion showing another tab's doc; the
-  // left pane (#viewer) stays the single fully-interactive editor. Full
-  // simultaneous dual-EDITING needs the editor singletons (_activeUniver,
-  // _activeSuperdoc, state.editor) to become pane-scoped — a follow-up.
-  function disposeSplitSuperdoc() {
-    if (!_splitSuperdoc) return;
-    try { _splitSuperdoc.destroy(); } catch {}
-    _splitSuperdoc = null;
+  // Two side-by-side document panes: #viewer (left) and #split-pane-body
+  // (right). Both render READ-ONLY by default (renderReadonlyInto); the active
+  // pane is where tree-clicks land and where the single editor mounts when you
+  // click Edit. At most one editor is ever alive (state.editorPane), so we never
+  // pane-scope the editor singletons — editing simply "follows" the active pane.
+  // Each pane owns its own read-only docx SuperDoc instance.
+  const paneSuperdoc = { left: null, right: null };
+  function disposePaneSuperdoc(pane) {
+    if (paneSuperdoc[pane]) { try { paneSuperdoc[pane].destroy(); } catch {} paneSuperdoc[pane] = null; }
   }
-  function splitTabDoc() {
-    const t = state.tabs.find(x => x.id === state.split.tabId);
-    if (!t || !t.docPath) return null;
-    return state.docsByPath.get(t.docPath) || null;
+  function otherPane(p) { return (p || state.split.active) === 'left' ? 'right' : 'left'; }
+  function paneHostEl(pane) { return pane === 'right' ? $('#split-pane-body') : $('#viewer'); }
+  function activeHostEl() { return state.split.on ? paneHostEl(state.split.active) : $('#viewer'); }
+  function paneDoc(pane) { const p = state.split[pane + 'Path']; return p ? (state.docsByPath.get(p) || null) : null; }
+
+  function anyEditorDirty() {
+    return (state.editor && isEditorDirty()) || isCodeEditorDirty() || isSheetDirty() || isDocxDirty();
   }
+  // Dispose whichever single editor is currently live (any type).
+  function disposeLiveEditor() {
+    if (state.editor) destroyEditor();
+    if (state.codeEditor) disposeCodeEditor();
+    if (_activeUniver) disposeSpreadsheet();
+    if (_activeSuperdoc) disposeSuperdoc();
+  }
+
   function persistSplit() {
     if (state.isEmbed || state.suppressPersist) return;
     try {
       tabStore().setItem('clawdoc.split', JSON.stringify({
-        on: state.split.on, ratio: state.split.ratio, tabId: state.split.tabId,
+        on: state.split.on, ratio: state.split.ratio, active: state.split.active,
+        leftPath: state.split.leftPath, rightPath: state.split.rightPath,
       }));
     } catch {}
   }
+
   function applySplitLayout() {
     const divider = $('#split-divider'), pane = $('#split-pane'), viewer = $('#viewer');
     const toggle = $('#split-toggle');
@@ -5699,115 +5788,218 @@
       const r = Math.min(0.8, Math.max(0.2, state.split.ratio || 0.5));
       viewer.style.flex = r + ' 1 0';
       pane.style.flex = (1 - r) + ' 1 0';
+      viewer.classList.toggle('pane-active', state.split.active === 'left');
+      pane.classList.toggle('pane-active', state.split.active === 'right');
       const titleEl = $('#split-pane-title');
-      if (titleEl) { const d = splitTabDoc(); titleEl.textContent = d ? (d.title || d.name) : '(no document)'; }
+      if (titleEl) { const d = paneDoc('right'); titleEl.textContent = d ? (d.title || d.name) : '(empty)'; }
     } else {
       divider.classList.add('hidden');
       pane.classList.add('hidden');
       viewer.style.flex = '';
       pane.style.flex = '';
+      viewer.classList.remove('pane-active');
+      pane.classList.remove('pane-active');
     }
   }
-  function renderSplitPane() {
-    if (!state.split.on) return;
-    const body = $('#split-pane-body');
-    if (!body) return;
-    disposeSplitSuperdoc();
-    const d = splitTabDoc();
+
+  // Render a pane's doc READ-ONLY into its host. Never touches the other pane.
+  async function renderPaneReadonly(pane) {
+    const host = paneHostEl(pane);
+    disposePaneSuperdoc(pane);
+    const d = paneDoc(pane);
     if (!d) {
-      body.innerHTML = '';
-      body.appendChild(el('div', { class: 'empty' },
-        el('div', { class: 'empty-sub' }, 'This tab has no open document — open a file in it and it shows here.')));
+      host.innerHTML = '';
+      host.appendChild(el('div', { class: 'empty' },
+        el('div', { class: 'empty-sub' }, 'Click a file in the tree to open it in this pane.')));
       return;
     }
-    body.innerHTML = '<div class="preview-loading">Loading…</div>';
-    renderReadonlyInto(d, body, {
-      setSuperdoc: (sd) => { _splitSuperdoc = sd; },
-      // Guard the async docx mount: still wanted only if split is on and this
-      // doc is still the one assigned to the pane.
-      isWanted: () => { const cur = splitTabDoc(); return state.split.on && cur && cur.path === d.path; },
+    host.innerHTML = '<div class="preview-loading">Loading…</div>';
+    await renderReadonlyInto(d, host, {
+      setSuperdoc: (sd) => { paneSuperdoc[pane] = sd; },
+      // Still wanted only if split is on, this doc is still assigned here, and
+      // the pane hasn't since been switched into edit mode.
+      isWanted: () => state.split.on && state.split[pane + 'Path'] === d.path && state.editorPane !== pane,
     });
   }
-  function openSplit(tabId) {
-    if (!tabId || !state.tabs.some(t => t.id === tabId)) return;
-    if (tabId === state.activeTabId) return; // left & right must differ
-    state.split.on = true;
-    state.split.tabId = tabId;
+
+  // Focus a pane (click). Lightweight: no re-render — just move focus, sync the
+  // breadcrumb/tree/context to that pane's doc.
+  function setActivePane(pane) {
+    if (!state.split.on || state.split.active === pane) return;
+    state.split.active = pane;
+    const d = paneDoc(pane);
+    if (d) {
+      state.currentDoc = d;
+      state.currentFolder = d.folder === '.' ? '' : d.folder;
+      renderTree();
+    }
     applySplitLayout();
-    renderSplitPane();
-    renderTabs();       // reflect the split badge on the companion tab
+    renderBreadcrumb();
+    persistSplit();
+    if (typeof updateChatContext === 'function') updateChatContext();
+    if (typeof updateAgentContext === 'function') updateAgentContext();
+  }
+
+  // Exit the editor in the current editor-pane back to a read-only view. Called
+  // by the md/text Close buttons (heavy editors have no Close — you navigate
+  // away). Assumes the caller already ran confirmDiscardEdits() (or there were
+  // no unsaved changes).
+  function exitEditor(doc) {
+    if (state.split.on && state.editorPane) {
+      const pane = state.editorPane;
+      state.editorPane = null;
+      renderPaneReadonly(pane);
+      applySplitLayout();
+      return;
+    }
+    const fresh = state.docsByPath.get(doc.path) || doc;
+    renderDoc(fresh, '', { reload: true });
+  }
+
+  // The active pane's doc has an editor mounted (single-pane docx/sheet auto-edit
+  // is off in split — everything opens read-only first, Edit mounts the editor).
+  function editableKind(doc) {
+    const k = docKind(doc);
+    return k === 'markdown' || k === 'text' || k === 'docx' || k === 'sheet';
+  }
+  // Mount the editor for the active pane's doc, guarding the OTHER pane's editor.
+  async function editActivePane() {
+    const pane = state.split.active;
+    const d = paneDoc(pane);
+    if (!d || !editableKind(d)) return;
+    if (state.editorPane === pane) return; // already editing here
+    // Cross-pane guard: the other pane has a live editor — offer to save.
+    if (state.editorPane && state.editorPane !== pane) {
+      const ok = await guardOtherPaneEditor();
+      if (!ok) return;
+    }
+    const host = paneHostEl(pane);
+    disposePaneSuperdoc(pane);
+    host.innerHTML = '';   // clear the read-only render (heavy editors don't self-clear)
+    state.editorPane = pane;
+    const k = docKind(d);
+    const bust = '_ts=' + Date.now();
+    if (k === 'sheet') await renderSpreadsheet(d, host, bust);
+    else if (k === 'docx') await renderDocx(d, host, bust);
+    else if (k === 'text') await startEditingText(d, host);
+    else await startEditing(d, host);
+    applySplitLayout();
+  }
+  // Save/Discard/Cancel the editor living in the non-active pane, then restore
+  // that pane to a read-only view. Returns false if the user cancels.
+  async function guardOtherPaneEditor() {
+    const p = state.editorPane;
+    if (!p) return true;
+    if (anyEditorDirty()) {
+      const choice = await uiChoice('Unsaved changes',
+        'You have unsaved changes in the other pane. Save them before editing this one?',
+        ['Save', 'Discard', 'Cancel']);
+      if (!choice || choice === 'Cancel') return false;
+      if (choice === 'Save' && state.editorSaveFn) { try { await state.editorSaveFn(); } catch {} }
+    }
+    disposeLiveEditor();
+    state.editorPane = null;
+    await renderPaneReadonly(p);
+    return true;
+  }
+
+  // Topbar toggle: open split immediately (freeze current doc into the left
+  // pane; right pane starts empty), or close it.
+  function toggleSplit() {
+    if (state.split.on) { closeSplit(); return; }
+    openSplitNow();
+  }
+  async function openSplitNow() {
+    // If the main viewer is mid-edit, guard before freezing it to read-only,
+    // then fully dispose it (confirmDiscardEdits leaves a clean docx/sheet
+    // editor mounted; we need it gone before rendering read-only).
+    if ((state.editor || state.codeEditor || _activeUniver || _activeSuperdoc) && !confirmDiscardEdits()) return;
+    disposeLiveEditor();
+    state.editorPane = null;
+    state.split.on = true;
+    state.split.active = 'left';
+    state.split.leftPath = state.currentDoc ? state.currentDoc.path : null;
+    state.split.rightPath = null;
+    applySplitLayout();
+    await renderPaneReadonly('left');
+    await renderPaneReadonly('right');
+    renderBreadcrumb();
     persistSplit();
   }
   function closeSplit() {
     if (!state.split.on) return;
+    if (state.editorPane) {
+      if (!confirmDiscardEdits()) return;
+      disposeLiveEditor();
+      state.editorPane = null;
+    }
+    disposePaneSuperdoc('left');
+    disposePaneSuperdoc('right');
+    const keep = paneDoc(state.split.active) || state.currentDoc;
     state.split.on = false;
-    disposeSplitSuperdoc();
     const body = $('#split-pane-body'); if (body) body.innerHTML = '';
     applySplitLayout();
-    renderTabs();
+    // Restore the single-pane view with the active pane's doc.
+    if (keep) { state.currentDoc = keep; renderDoc(keep, ''); }
+    else { $('#viewer').innerHTML = ''; }
+    renderBreadcrumb();
     persistSplit();
   }
-  // Open split from a specific tab: that tab goes in the companion pane. If it's
-  // the active tab, companion becomes the next tab instead (you can't split a
-  // tab against itself).
-  function openSplitWithTab(t) {
-    let rightId = t.id;
-    if (rightId === state.activeTabId) {
-      const others = state.tabs.filter(x => x.id !== state.activeTabId);
-      if (!others.length) { setStatus('Open a second tab to use split view', 'error'); return; }
-      rightId = others[0].id;
-    }
-    openSplit(rightId);
-  }
-  // Topbar toggle: off -> split active tab against its right neighbour; on -> close.
-  function toggleSplit() {
-    if (state.split.on) { closeSplit(); return; }
-    if (state.tabs.length < 2) { setStatus('Open a second tab to use split view', 'error'); return; }
-    const idx = state.tabs.findIndex(t => t.id === state.activeTabId);
-    const right = state.tabs[(idx + 1) % state.tabs.length];
-    openSplit(right.id);
-  }
-  // Swap which doc is editable (left) vs read-only (right).
-  function swapSplit() {
+  // Swap the two panes' documents (⇄).
+  async function swapSplit() {
     if (!state.split.on) return;
-    const rightId = state.split.tabId, leftId = state.activeTabId;
-    if (!rightId || rightId === leftId) return;
-    // Reassign the companion to the outgoing-left tab BEFORE switching, so the
-    // tab-switch's own split refresh doesn't see a left/right collision.
-    state.split.tabId = leftId;
-    switchTab(rightId);
-    if (state.activeTabId !== rightId) { // switch cancelled (unsaved edits) — revert
-      state.split.tabId = rightId;
-      applySplitLayout();
-      renderSplitPane();
-      return;
+    if (state.editorPane) {
+      if (!confirmDiscardEdits()) return;
+      disposeLiveEditor();
+      state.editorPane = null;
     }
+    const l = state.split.leftPath;
+    state.split.leftPath = state.split.rightPath;
+    state.split.rightPath = l;
+    await renderPaneReadonly('left');
+    await renderPaneReadonly('right');
     applySplitLayout();
-    renderSplitPane();
-    renderTabs();
+    renderBreadcrumb();
     persistSplit();
   }
-  // Keep the companion pane coherent as tabs change: re-render if its doc
-  // changed, or close the split if its tab is gone or collides with active.
+  // Open a specific doc into the split's right pane (from the tab context menu).
+  async function openSplitWithDoc(doc) {
+    if (!doc) return;
+    if (!state.split.on) { await openSplitNow(); }
+    state.split.rightPath = doc.path;
+    state.split.active = 'right';
+    state.currentDoc = doc;
+    await renderPaneReadonly('right');
+    applySplitLayout();
+    renderBreadcrumb();
+    persistSplit();
+  }
+  // On reindex: drop panes whose doc vanished, re-render the rest.
   function refreshSplitForTabs() {
     if (!state.split.on) return;
-    if (!state.tabs.some(t => t.id === state.split.tabId) || state.split.tabId === state.activeTabId) {
-      closeSplit();
-      return;
-    }
+    ['left', 'right'].forEach(pane => {
+      const p = state.split[pane + 'Path'];
+      if (p && !state.docsByPath.has(p) && state.editorPane !== pane) {
+        state.split[pane + 'Path'] = null;
+        renderPaneReadonly(pane);
+      }
+    });
     applySplitLayout();
-    renderSplitPane();
   }
   function restoreSplit() {
     let o = null;
     try { o = JSON.parse(tabStore().getItem('clawdoc.split') || 'null'); } catch {}
     if (!o) return;
     if (typeof o.ratio === 'number') state.split.ratio = o.ratio;
-    if (o.on && o.tabId && o.tabId !== state.activeTabId && state.tabs.some(t => t.id === o.tabId)) {
+    if (o.on) {
       state.split.on = true;
-      state.split.tabId = o.tabId;
+      state.split.active = o.active === 'right' ? 'right' : 'left';
+      state.split.leftPath = (o.leftPath && state.docsByPath.has(o.leftPath)) ? o.leftPath : null;
+      state.split.rightPath = (o.rightPath && state.docsByPath.has(o.rightPath)) ? o.rightPath : null;
       applySplitLayout();
-      renderSplitPane();
+      renderPaneReadonly('left');
+      renderPaneReadonly('right');
+      renderBreadcrumb();
     }
   }
   function initSplitDivider() {
@@ -6303,8 +6495,7 @@
     bar.innerHTML = '';
     for (const t of state.tabs) {
       const tab = el('div', {
-        class: 'tab' + (t.id === state.activeTabId ? ' active' : '')
-          + (state.split.on && t.id === state.split.tabId ? ' split-companion' : ''),
+        class: 'tab' + (t.id === state.activeTabId ? ' active' : ''),
         dataset: { tabId: t.id },
         title: tabLabel(t),
       });
@@ -6421,12 +6612,11 @@
     if (state.tabs.length > 1) {
       items.push({ label: 'Close others', onClick: () => closeOtherTabs(t.id) });
     }
-    // Split view (#50): show this tab in the read-only companion pane.
-    items.push('-');
-    if (state.split.on && state.split.tabId === t.id) {
-      items.push({ label: 'Close split view', onClick: () => closeSplit() });
-    } else {
-      items.push({ label: 'Open in split view', onClick: () => openSplitWithTab(t) });
+    // Split view (#50): open this tab's document in the split's right pane.
+    if (hasDoc) {
+      items.push('-');
+      items.push({ label: 'Open in split view', onClick: () => openSplitWithDoc(state.docsByPath.get(t.docPath)) });
+      if (state.split.on) items.push({ label: 'Close split view', onClick: () => closeSplit() });
     }
     showCtxMenu(x, y, items, hasDoc ? basename(t.docPath) : 'Tab');
   }
@@ -7061,6 +7251,9 @@
     $('#split-toggle').addEventListener('click', toggleSplit);
     $('#split-close').addEventListener('click', closeSplit);
     $('#split-swap').addEventListener('click', swapSplit);
+    // Click a pane to make it active (where tree-clicks land / Edit mounts).
+    $('#viewer').addEventListener('mousedown', () => setActivePane('left'), true);
+    $('#split-pane').addEventListener('mousedown', () => setActivePane('right'), true);
     initSplitDivider();
     document.querySelectorAll('[data-pane-filter]').forEach((inp) => {
       const paneId = inp.getAttribute('data-pane-filter');

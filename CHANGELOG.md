@@ -6,6 +6,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Changed
+- Split view (#50) reworked from a tab-coupled read-only companion into two real document panes. It now opens immediately (no need for a second tab); click a pane to make it active (focus ring); a tree click opens the file in the active pane. Both panes render read-only by default and the single editor "follows" the active pane — click Edit to edit either side (markdown, text/code, Word and spreadsheets). Only one editor is ever live, so there's no remount jank on navigation; clicking Edit in one pane while the other has unsaved changes prompts to Save / Discard / Cancel. The ⇄ button swaps the two panes.
+
 ## [0.3.2] — 2026-07-24
 
 ### Added
