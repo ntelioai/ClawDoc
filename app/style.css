@@ -2202,18 +2202,8 @@ a.agent-file-link:hover { border-bottom-style: solid; }
 .agent-insert:disabled { opacity: 0.4; cursor: default; }
 .agent-insert:not(:disabled):hover { border-color: var(--tp-accent); color: var(--tp-accent); }
 
-#claude-toggle {
-  height: 32px;
-  padding: 0 12px;
-  border: 1px solid var(--border-strong);
-  border-radius: 6px;
-  background: var(--bg-elev);
-  font-size: 13px;
-  color: var(--text);
-  cursor: pointer;
-}
-#claude-toggle:hover { background: var(--bg-hover); border-color: var(--accent); }
-#claude-toggle.active { background: var(--accent); color: white; border-color: var(--accent); }
+/* #claude-toggle is now an icon button — it shares .topbar-icon-btn styling
+   (32x32, hover, active) with the other topbar toggles. */
 
 /* ---------- preview modal (Quick Look style) ---------- */
 .preview-modal {
