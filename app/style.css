@@ -2469,21 +2469,8 @@ a.agent-file-link:hover { border-bottom-style: solid; }
 }
 
 /* ---------- two-pane file manager (mc mode) ---------- */
-#mc-toggle {
-  height: 32px;
-  width: 36px;
-  padding: 0;
-  border: 1px solid var(--border-strong);
-  border-radius: 6px;
-  background: var(--bg-elev);
-  color: var(--text);
-  cursor: pointer;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-}
-#mc-toggle:hover { background: var(--bg-hover); border-color: var(--accent); }
-#mc-toggle.active { background: var(--accent); color: white; border-color: var(--accent); }
+/* #mc-toggle / #split-toggle share the .topbar-icon-btn styling (32x32) with
+   the sidebar/settings buttons so all topbar icons are the same size. */
 
 /* When MC is on, hide the normal layout and reveal the two-pane shell. */
 .mc-mode {
