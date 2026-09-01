@@ -46,6 +46,7 @@
   "dependencies": {
     "@octokit/auth-oauth-device": "^8.0.3",
     "@octokit/request": "^10.0.10",
+    "better-sqlite3": "^13.0.3",
     "chokidar": "^5.0.0",
     "diff": "^9.0.0",
     "isomorphic-git": "^1.38.3",

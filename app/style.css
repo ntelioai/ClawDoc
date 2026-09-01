@@ -156,9 +156,12 @@ html, body {
 .topbar-actions {
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: 6px;
   margin-left: auto;  /* push the cluster flush to the right edge */
 }
+/* Widen the gap before a button that starts a new semantic group so related
+   icons cluster together (folders+split | mc | claude | settings). */
+.topbar-actions .topbar-group-start { margin-left: 14px; }
 .topbar-icon-btn {
   height: 32px;
   width: 32px;
@@ -166,7 +169,7 @@ html, body {
   border: 1px solid var(--border-strong);
   border-radius: 6px;
   background: var(--bg-elev);
-  color: var(--text-muted);
+  color: var(--text);
   cursor: pointer;
   display: inline-flex;
   align-items: center;
@@ -503,6 +506,19 @@ body.resizing-sidebar * { cursor: col-resize !important; user-select: none !impo
 body.fileop-busy #tree,
 body.fileop-busy .row-list,
 body.fileop-busy [data-pane-tree] { cursor: progress; }
+
+/* Just-moved row pulse. Brief green wash that fades out — the user's eye
+   tracks straight to where their file/folder landed, even if the pane was
+   already scrolled or the item slotted between existing rows. */
+.mctrow.just-moved,
+.row.just-moved {
+  animation: just-moved-flash 1.5s ease-out 1;
+}
+@keyframes just-moved-flash {
+  0%   { background-color: rgba(46, 160, 67, 0.35); }
+  60%  { background-color: rgba(46, 160, 67, 0.18); }
+  100% { background-color: transparent; }
+}
 .trow:hover { background: var(--bg-hover); }
 .trow.active { background: var(--accent-soft); color: var(--accent-strong); }
 .trow.active .tname { font-weight: 500; }
@@ -552,6 +568,25 @@ body.fileop-busy [data-pane-tree] { cursor: progress; }
 .tnode.collapsed > .tchildren { display: none; }
 
 .trow mark { background: #ffe9a8; color: inherit; padding: 0 1px; border-radius: 2px; }
+
+/* CRM virtual root: pinned above workspaces, styled as a section header so it
+   reads as an app-level menu entry rather than a filesystem folder. */
+.trow.crm-root .tname {
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  font-size: 11.5px;
+  font-weight: 600;
+  color: var(--text-muted);
+}
+.trow.crm-root.active .tname,
+.trow.crm-root:hover .tname { color: var(--text); }
+.trow.crm-root .ticon { color: var(--accent); }
+.trow.crm-child.active { background: var(--accent-soft); color: var(--accent-strong); }
+
+/* Bundled CRM dashboard/report render as full-bleed iframes; suppress the
+   sandbox chrome that .html-frame-wrap adds for user-authored HTML docs. */
+.crm-frame-wrap { padding: 0; margin: 0; height: 100%; }
+.crm-frame { width: 100%; height: 100%; border: 0; display: block; }
 
 /* ---------- content ---------- */
 .content {
@@ -1473,6 +1508,9 @@ mark.hl { background: #ffe9a8; color: inherit; padding: 0 1px; border-radius: 2p
 }
 .settings-row button:hover { color: var(--text); border-color: var(--accent); }
 .settings-row button.danger:hover { color: var(--danger); border-color: var(--danger); }
+/* Workspace reorder arrows: compact so up/down/remove all fit on one row. */
+.settings-row .ws-move { padding: 0 6px; font-size: 10px; line-height: 1; }
+.settings-row .ws-move:disabled { opacity: 0.35; cursor: default; }
 .settings-help { font-size: 11px; color: var(--text-dim); margin-top: 6px; }
 .settings-input {
   flex: 1;
@@ -1510,6 +1548,27 @@ mark.hl { background: #ffe9a8; color: inherit; padding: 0 1px; border-radius: 2p
 }
 .settings-status.ok { color: #1f7a3a; }
 .settings-status.error { color: var(--danger); }
+
+/* CRM settings — enable toggle + inline action buttons under the path input. */
+.settings-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12.5px;
+  color: var(--text);
+  cursor: pointer;
+}
+.settings-toggle input[type="checkbox"] {
+  width: 15px;
+  height: 15px;
+  accent-color: var(--accent);
+  cursor: pointer;
+}
+.settings-inline-actions {
+  display: inline-flex;
+  gap: 6px;
+  align-items: center;
+}
 
 /* ---------- editor ---------- */
 .doc-edit {
@@ -2048,6 +2107,42 @@ body.both-claude #chat-panel { right: var(--agent-w, 620px); box-shadow: none; }
   font-family: var(--font-mono);
 }
 .agent-history-item-ws { color: var(--tp-accent, #2563eb); font-weight: 600; }
+.agent-history-item-hits {
+  color: var(--tp-accent, #2563eb);
+  font-weight: 600;
+}
+/* Full-text search input in the modal header. Sits between title and close;
+   flexes to fill available space so the modal doesn't feel cramped. */
+.agent-history-search {
+  flex: 1;
+  margin: 0 12px;
+  min-width: 0;
+  height: 28px;
+  padding: 0 10px;
+  border: 1px solid var(--tp-border, #e3e8ee);
+  border-radius: 6px;
+  background: var(--tp-bg, #ffffff);
+  color: var(--tp-fg, #1f2933);
+  font: inherit;
+  font-size: 12.5px;
+  outline: none;
+}
+.agent-history-search:focus {
+  border-color: var(--tp-accent, #2563eb);
+  box-shadow: 0 0 0 2px var(--tp-accent-soft, rgba(37,99,235,0.15));
+}
+.agent-history-item-preview mark {
+  background: #ffe9a8;
+  color: inherit;
+  padding: 0 2px;
+  border-radius: 2px;
+}
+/* Snippets from the middle of a message can be long; let them wrap in the
+   search view instead of being truncated so the matched context is visible. */
+.agent-history-item-preview:has(mark) {
+  white-space: normal;
+  line-height: 1.4;
+}
 
 /* "Claude is working…" indicator */
 .agent-working {
@@ -2496,6 +2591,16 @@ a.agent-file-link:hover { border-bottom-style: solid; }
 /* ---------- two-pane file manager (mc mode) ---------- */
 /* #mc-toggle / #split-toggle share the .topbar-icon-btn styling (32x32) with
    the sidebar/settings buttons so all topbar icons are the same size. */
+
+/* mc-toggle uses a raster glyph masked so it inherits button color states. */
+#mc-toggle .mc-icon {
+  display: block;
+  width: 16px;
+  height: 16px;
+  background-color: currentColor;
+  -webkit-mask: url('assets/mc.png') center / contain no-repeat;
+          mask: url('assets/mc.png') center / contain no-repeat;
+}
 
 /* When MC is on, hide the normal layout and reveal the two-pane shell. */
 .mc-mode {

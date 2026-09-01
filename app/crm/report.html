@@ -1,0 +1,390 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Pipeline Report — ntelio</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Kanit:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+:root{
+  --ink:#0c1f28; --ink-soft:#2b3f48; --muted:#6e7a82;
+  --teal:#3e7b97; --teal-deep:#2a5a72;
+  --hairline:#d4d2cb; --hairline-strong:#b9b7af;
+  --bg-alt:#f5f4ef;
+  --display:"Kanit",system-ui,sans-serif;
+  --mono:"JetBrains Mono",ui-monospace,SFMono-Regular,Menlo,monospace;
+}
+
+*{box-sizing:border-box}
+html,body{margin:0;padding:0;background:#fff;color:var(--ink)}
+body{font-family:var(--display);font-size:10.5pt;line-height:1.35;-webkit-font-smoothing:antialiased}
+.page{max-width:190mm;margin:0 auto;padding:10mm 8mm}
+
+/* ---------- Toolbar (screen only) ---------- */
+.toolbar{
+  display:flex;justify-content:space-between;align-items:center;
+  padding-bottom:8px;margin-bottom:10px;
+  border-bottom:1px dashed var(--hairline);
+}
+.toolbar .hint{font-family:var(--mono);font-size:8.5pt;color:var(--muted)}
+.toolbar .hint a{color:var(--teal);text-decoration:none}
+.toolbar .hint a:hover{text-decoration:underline}
+.btn-pdf{
+  font-family:var(--display);font-weight:500;font-size:9pt;letter-spacing:.02em;
+  padding:6px 12px;border:1px solid var(--teal);
+  background:var(--teal);color:#fff;border-radius:2px;cursor:pointer;
+  display:inline-flex;align-items:center;gap:6px;
+  transition:background .15s ease;
+}
+.btn-pdf:hover{background:var(--teal-deep);border-color:var(--teal-deep)}
+.btn-pdf svg{width:12px;height:12px;stroke:currentColor;fill:none;stroke-width:2}
+
+/* ---------- Header strip ---------- */
+.rpt-head{
+  display:flex;justify-content:space-between;align-items:flex-end;
+  border-bottom:1.5px solid var(--ink);padding-bottom:6px;margin-bottom:10px;
+}
+.rpt-head .left .eyebrow{
+  font-size:7.5pt;letter-spacing:.2em;text-transform:uppercase;
+  color:var(--teal);font-weight:600;
+}
+.rpt-head .left h1{
+  margin:1px 0 0;font-size:15pt;font-weight:600;letter-spacing:-.01em;line-height:1.1;
+}
+.rpt-head .left h1 em{font-style:normal;color:var(--teal)}
+.rpt-head .right{
+  font-family:var(--mono);font-size:8pt;color:var(--muted);
+  text-align:right;line-height:1.5;
+}
+.rpt-head .right b{color:var(--ink);font-weight:500}
+
+/* ---------- KPI strip ---------- */
+.kpi-strip{
+  display:grid;grid-template-columns:repeat(4,1fr);gap:0;
+  border:1px solid var(--hairline);border-radius:2px;
+  background:var(--bg-alt);margin-bottom:10px;
+  page-break-inside:avoid;
+}
+.kpi{padding:6px 10px;border-right:1px solid var(--hairline)}
+.kpi:last-child{border-right:none}
+.kpi .l{
+  font-size:7.5pt;letter-spacing:.15em;text-transform:uppercase;
+  color:var(--muted);font-weight:500;
+}
+.kpi .n{
+  font-family:var(--mono);font-size:15pt;font-weight:500;color:var(--ink);
+  line-height:1.05;margin-top:2px;
+}
+.kpi .v{font-family:var(--mono);font-size:8.5pt;color:var(--ink-soft);margin-top:2px}
+.kpi .w{font-family:var(--mono);font-size:7.5pt;color:var(--muted);margin-top:1px}
+.kpi.open .n{color:var(--teal-deep)}
+.kpi.won  .n{color:#2e7d55}
+.kpi.lost .n{color:#b34a4a}
+
+/* ---------- Split: funnel + stage-summary ---------- */
+.split{
+  display:grid;grid-template-columns:1.05fr 1fr;gap:12px;
+  margin-bottom:10px;page-break-inside:avoid;
+}
+.section-title{
+  font-family:var(--display);font-weight:500;font-size:8.5pt;
+  letter-spacing:.15em;text-transform:uppercase;color:var(--muted);
+  margin:0 0 5px;padding-bottom:3px;border-bottom:1px solid var(--hairline);
+}
+
+.funnel-wrap{border:1px solid var(--hairline);padding:6px 8px;background:#fff}
+.funnel-svg{width:100%;display:block;overflow:visible}
+.funnel-svg .slice{
+  fill:var(--teal);fill-opacity:.92;
+  stroke:#fff;stroke-width:1.5;
+}
+.funnel-svg .slice.won {fill:#2e7d55}
+.funnel-svg .slice.lost{fill:#b34a4a}
+.funnel-svg text{font-family:var(--display)}
+.funnel-svg text.name{font-weight:500;font-size:9pt;fill:var(--ink)}
+.funnel-svg text.sub {font-family:var(--mono);font-size:7pt;fill:var(--muted)}
+.funnel-svg text.in  {font-family:var(--mono);font-weight:500;font-size:8pt;fill:#fff}
+.funnel-svg text.out {font-family:var(--mono);font-size:8pt;fill:var(--ink-soft)}
+.funnel-svg text.wtd {font-family:var(--mono);font-size:7pt;fill:var(--muted)}
+
+/* ---------- Tables ---------- */
+table{width:100%;border-collapse:collapse}
+table.stage-sum,table.deals{border:1px solid var(--hairline);font-size:9pt}
+table.stage-sum th,table.deals th{
+  text-align:left;padding:5px 7px;font-size:7pt;letter-spacing:.15em;
+  text-transform:uppercase;color:var(--muted);font-weight:500;
+  background:var(--bg-alt);border-bottom:1px solid var(--hairline-strong);
+}
+table.stage-sum td,table.deals td{
+  padding:4px 7px;border-bottom:1px solid var(--hairline);vertical-align:top;
+}
+table.stage-sum tbody tr:last-child td,table.deals tbody tr:last-child td{border-bottom:none}
+table.stage-sum td.num,table.deals td.num{
+  font-family:var(--mono);text-align:right;white-space:nowrap;
+}
+table.stage-sum td.stage{font-weight:500;text-transform:capitalize}
+table.stage-sum tr.won  td.stage{color:#2e7d55}
+table.stage-sum tr.lost td.stage{color:#b34a4a}
+
+table.deals{font-size:8.5pt;margin-top:5px}
+table.deals td.stage{
+  font-size:7.5pt;color:var(--muted);text-transform:capitalize;
+  white-space:nowrap;font-family:var(--mono);
+}
+table.deals tbody tr.won  td.stage{color:#2e7d55;font-weight:500}
+table.deals tbody tr.lost td.stage{color:#b34a4a;font-weight:500}
+table.deals tbody tr.hot  td.stage{color:var(--teal-deep);font-weight:500}
+table.deals .title{font-weight:500;color:var(--ink)}
+table.deals .org{color:var(--ink-soft)}
+table.deals .next-step{
+  color:var(--muted);font-size:7.5pt;font-style:italic;margin-top:1px;
+}
+
+.foot{
+  font-family:var(--mono);font-size:7pt;color:var(--muted);
+  border-top:1px solid var(--hairline);padding-top:5px;margin-top:12px;
+  display:flex;justify-content:space-between;
+}
+
+.err{
+  padding:16px;border:1px solid var(--hairline-strong);
+  background:var(--bg-alt);font-family:var(--mono);font-size:9pt;
+}
+.err code{background:#fff;padding:1px 5px;border:1px solid var(--hairline);border-radius:2px}
+
+/* ---------- Print (Save as PDF) ---------- */
+@page { size: A4 portrait; margin: 12mm; }
+@media print {
+  html,body{background:#fff}
+  .page{max-width:none;padding:0}
+  .no-print,.toolbar{display:none !important}
+  .rpt-head{page-break-after:avoid}
+  .section-title{page-break-after:avoid}
+  .split{page-break-inside:avoid}
+  .kpi-strip{page-break-inside:avoid}
+  table.deals thead{display:table-header-group} /* repeat header across pages */
+  table.deals tr{page-break-inside:avoid}
+  .foot{page-break-inside:avoid}
+  a{color:inherit;text-decoration:none}
+}
+</style>
+</head>
+<body>
+<div class="page">
+
+  <div class="toolbar no-print">
+    <span class="hint">
+      Compact print / PDF view · <a href="index.html">interactive dashboard →</a>
+    </span>
+    <button class="btn-pdf" onclick="window.print()"
+            title="Opens your browser's print dialog — pick 'Save as PDF'">
+      <svg viewBox="0 0 24 24" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+        <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+        <polyline points="7 10 12 15 17 10"/>
+        <line x1="12" y1="15" x2="12" y2="3"/>
+      </svg>
+      Save to PDF
+    </button>
+  </div>
+
+  <div class="rpt-head">
+    <div class="left">
+      <div class="eyebrow">ntelio · CRM</div>
+      <h1>Pipeline <em>Funnel</em> Report</h1>
+    </div>
+    <div class="right" id="meta">Loading…</div>
+  </div>
+
+  <div id="app"></div>
+
+  <div class="foot">
+    <span>Source: ClawDoc CRM database</span>
+    <span>ntelio · applied AI venture studio</span>
+  </div>
+
+</div>
+
+<script>
+const STAGE_ORDER = ["qualification","discovery","proposal","negotiation","verbal_commit","closed_won","closed_lost"];
+const STAGE_LABEL = {
+  qualification:"Qualification", discovery:"Discovery", proposal:"Proposal",
+  negotiation:"Negotiation", verbal_commit:"Verbal Commit",
+  closed_won:"Closed · Won", closed_lost:"Closed · Lost",
+};
+
+const fmtMoney = (n, ccy="USD") => new Intl.NumberFormat("en-US",{
+  style:"currency", currency:ccy, maximumFractionDigits:0,
+}).format(n||0);
+const fmtInt = n => new Intl.NumberFormat("en-US").format(n||0);
+const pct    = n => Math.round((n||0)*100)+"%";
+const escape = s => (s??"").toString().replace(/[&<>"']/g,c=>({ "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;" }[c]));
+
+async function load(){
+  let data;
+  try {
+    const r = await fetch("/api/crm/funnel.json",{cache:"no-store"});
+    if(!r.ok) throw new Error("HTTP "+r.status);
+    data = await r.json();
+  } catch(e){
+    document.getElementById("app").innerHTML =
+      `<div class="err">Couldn't load CRM data: ${escape(e.message)}.<br><br>
+       Verify the database path in Settings &rarr; CRM.</div>`;
+    document.getElementById("meta").textContent = "";
+    return;
+  }
+  render(data);
+}
+
+function render(data){
+  const ccy = (data.currencies_present && data.currencies_present[0]) || "USD";
+  const mixed = (data.currencies_present||[]).length > 1;
+  const s = data.summary || {};
+  const nonEmpty = (data.stages||[]).filter(x => x.count > 0);
+
+  document.getElementById("meta").innerHTML = `
+    generated <b>${escape((data.generated_at||"").replace("T"," ").replace("+00:00"," UTC"))}</b><br>
+    currency <b>${escape(ccy)}${mixed?" (mixed)":""}</b> ·
+    ${fmtInt(s.all?.count||0)} deals total
+  `;
+
+  document.getElementById("app").innerHTML = `
+    ${kpiStrip(s, ccy)}
+    <div class="split">
+      <div>
+        <div class="section-title">Funnel by stage</div>
+        <div class="funnel-wrap">${funnelSVG(nonEmpty, ccy)}</div>
+      </div>
+      <div>
+        <div class="section-title">Stage summary</div>
+        ${stageSummary(nonEmpty, ccy)}
+      </div>
+    </div>
+    <div class="section-title">Deals (${fmtInt(s.all?.count||0)})</div>
+    ${dealsTable(nonEmpty, ccy)}
+  `;
+}
+
+function kpiStrip(s, ccy){
+  const tile = (cls, l, o) => `
+    <div class="kpi ${cls}">
+      <div class="l">${l}</div>
+      <div class="n">${fmtInt(o?.count||0)}</div>
+      <div class="v">${fmtMoney(o?.total_value, ccy)}</div>
+      <div class="w">weighted ${fmtMoney(o?.weighted_value, ccy)}</div>
+    </div>`;
+  return `<div class="kpi-strip">
+    ${tile("open","Open",  s.open)}
+    ${tile("won", "Won",   s.won)}
+    ${tile("lost","Lost",  s.lost)}
+    ${tile("all", "All",   s.all)}
+  </div>`;
+}
+
+function funnelSVG(stages, ccy){
+  const ordered = STAGE_ORDER.map(k => stages.find(x => x.stage === k)).filter(s => s && s.count > 0);
+  if(!ordered.length) return `<em>No deals.</em>`;
+
+  const maxVal = Math.max(1, ...ordered.map(s => s.total_value || 0));
+  const W = 560, rowH = 48, sep = 2;
+  const fx0 = 110, fx1 = 440;
+  const fw  = fx1 - fx0;
+  const cx  = (fx0 + fx1) / 2;
+  const minRatio = 0.05;
+  const widthOf = v => Math.max(fw * minRatio, (v / maxVal) * fw);
+  const H = rowH * ordered.length + 8;
+
+  const slices = ordered.map((s, i) => {
+    const y0 = 4 + i * rowH;
+    const y1 = y0 + rowH - sep;
+    const topW = i === 0 ? fw : widthOf(ordered[i-1].total_value);
+    const botW = widthOf(s.total_value);
+    const points = [
+      [cx - topW/2, y0],[cx + topW/2, y0],
+      [cx + botW/2, y1],[cx - botW/2, y1],
+    ].map(p => p.join(",")).join(" ");
+    const cls  = s.stage === "closed_won" ? "won" : s.stage === "closed_lost" ? "lost" : "";
+    const midY = (y0 + y1) / 2;
+    const wide = botW > 80;
+    const label = STAGE_LABEL[s.stage] || s.stage;
+
+    return `
+      <polygon class="slice ${cls}" points="${points}"/>
+      <text class="name" x="${fx0-8}" y="${midY-1}"  text-anchor="end">${escape(label)}</text>
+      <text class="sub"  x="${fx0-8}" y="${midY+10}" text-anchor="end">${fmtInt(s.count)} deal${s.count===1?"":"s"}</text>
+      ${wide ? `<text class="in" x="${cx}" y="${midY+3}" text-anchor="middle">${fmtMoney(s.total_value, ccy)}</text>` : ""}
+      <text class="out" x="${fx1+8}" y="${midY-1}"  text-anchor="start">${fmtMoney(s.total_value, ccy)}</text>
+      <text class="wtd" x="${fx1+8}" y="${midY+10}" text-anchor="start">wtd ${fmtMoney(s.weighted_value, ccy)}</text>
+    `;
+  }).join("");
+
+  return `<svg class="funnel-svg" viewBox="0 0 ${W} ${H}" preserveAspectRatio="xMidYMid meet" role="img" aria-label="Sales funnel">${slices}</svg>`;
+}
+
+function stageSummary(stages, ccy){
+  const rows = stages.map(s => {
+    const cls = s.stage === "closed_won" ? "won" : s.stage === "closed_lost" ? "lost" : "";
+    return `<tr class="${cls}">
+      <td class="stage">${escape(STAGE_LABEL[s.stage] || s.stage)}</td>
+      <td class="num">${fmtInt(s.count)}</td>
+      <td class="num">${fmtMoney(s.total_value, ccy)}</td>
+      <td class="num">${fmtMoney(s.weighted_value, ccy)}</td>
+    </tr>`;
+  }).join("");
+  return `<table class="stage-sum">
+    <thead><tr>
+      <th>Stage</th>
+      <th style="text-align:right">Deals</th>
+      <th style="text-align:right">Value</th>
+      <th style="text-align:right">Weighted</th>
+    </tr></thead>
+    <tbody>${rows}</tbody>
+  </table>`;
+}
+
+function dealsTable(stages, ccy){
+  const all = [];
+  stages.forEach(s => (s.deals||[]).forEach(d => all.push({...d, _stage: s.stage})));
+  all.sort((a,b) => {
+    const sa = STAGE_ORDER.indexOf(a._stage);
+    const sb = STAGE_ORDER.indexOf(b._stage);
+    if(sa !== sb) return sa - sb;
+    return (b.value*b.probability) - (a.value*a.probability);
+  });
+  const rows = all.map(d => {
+    const cls =
+      d._stage === "closed_won"  ? "won"  :
+      d._stage === "closed_lost" ? "lost" :
+      d._stage === "verbal_commit" ? "hot" : "";
+    return `<tr class="${cls}">
+      <td class="stage">${escape(STAGE_LABEL[d._stage] || d._stage)}</td>
+      <td>
+        <span class="title">${escape(d.title||"")}</span>
+        <span class="org"> — ${escape(d.organization_name||"—")}</span>
+        ${d.next_step ? `<div class="next-step">${escape(d.next_step)}</div>` : ""}
+      </td>
+      <td class="num">${fmtMoney(d.value, d.currency||ccy)}</td>
+      <td class="num">${pct(d.probability)}</td>
+      <td class="num">${fmtMoney((d.value||0)*(d.probability||0), d.currency||ccy)}</td>
+      <td class="num">${escape(d.expected_close_date||"—")}</td>
+      <td>${escape(d.owner||"—")}</td>
+    </tr>`;
+  }).join("");
+  return `<table class="deals">
+    <thead><tr>
+      <th>Stage</th><th>Deal</th>
+      <th style="text-align:right">Value</th>
+      <th style="text-align:right">Prob</th>
+      <th style="text-align:right">Weighted</th>
+      <th style="text-align:right">Close</th>
+      <th>Owner</th>
+    </tr></thead>
+    <tbody>${rows}</tbody>
+  </table>`;
+}
+
+load();
+</script>
+</body>
+</html>

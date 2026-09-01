@@ -13,6 +13,7 @@ const pty = require('node-pty');
 const chokidar = require('chokidar');
 const gitOps = require('./git');
 const github = require('./github');
+const crm = require('./crm');
 
 const SCRIPT_DIR = __dirname;
 const APP_DIR = path.join(SCRIPT_DIR, 'app');
@@ -157,6 +158,30 @@ function setProviderSettings(cfg) {
     apiKey: cfg.apiKeyProvided ? String(cfg.apiKey || '').trim() : cur.apiKey,
   };
   s.provider = next;
+  writeSettings(s);
+  return next;
+}
+
+// CRM feature settings: { enabled: bool, dbPath: string }. Off by default.
+// When enabled, a virtual "CRM" root shows up above the workspaces in the
+// sidebar and the /api/crm/* endpoints go live.
+function getCrmSettings() {
+  const s = readSettings();
+  const c = s.crm && typeof s.crm === 'object' ? s.crm : {};
+  return {
+    enabled: !!c.enabled,
+    dbPath: typeof c.dbPath === 'string' && c.dbPath.trim() ? c.dbPath.trim() : crm.defaultDbPath(),
+  };
+}
+
+function setCrmSettings(cfg) {
+  const s = readSettings();
+  const cur = getCrmSettings();
+  const next = {
+    enabled: typeof cfg.enabled === 'boolean' ? cfg.enabled : cur.enabled,
+    dbPath: typeof cfg.dbPath === 'string' && cfg.dbPath.trim() ? cfg.dbPath.trim() : cur.dbPath,
+  };
+  s.crm = next;
   writeSettings(s);
   return next;
 }
@@ -421,6 +446,78 @@ const server = http.createServer((req, res) => {
     return handleSaveSettings(req, res);
   }
 
+  // ---- CRM (sales pipeline) ----
+  // Bundled dashboard/report views. Served under /crm/* so they can be embedded
+  // as tabs; both HTML files fetch /api/crm/funnel.json which queries the DB
+  // in real time (no manual regen step, unlike the standalone script).
+  if (req.method === 'GET' && (pathname === '/crm/dashboard' || pathname === '/crm/dashboard.html')) {
+    return sendFile(res, path.join(APP_DIR, 'crm', 'dashboard.html'));
+  }
+  if (req.method === 'GET' && (pathname === '/crm/report' || pathname === '/crm/report.html')) {
+    return sendFile(res, path.join(APP_DIR, 'crm', 'report.html'));
+  }
+
+  if (req.method === 'GET' && pathname === '/api/crm/funnel.json') {
+    const cfg = getCrmSettings();
+    if (!cfg.enabled) return sendJson(res, 404, { error: 'CRM is disabled — enable it in Settings' });
+    try {
+      const abs = crm.resolveDbPath(cfg.dbPath);
+      const funnel = crm.getFunnel(abs);
+      return sendJson(res, 200, funnel);
+    } catch (err) {
+      const code = err && err.code === 'ENOENT' ? 404 : 500;
+      return sendJson(res, code, { error: err && err.message || String(err) });
+    }
+  }
+
+  if (req.method === 'GET' && pathname === '/api/crm/settings') {
+    const cfg = getCrmSettings();
+    const abs = crm.resolveDbPath(cfg.dbPath);
+    return sendJson(res, 200, {
+      enabled: cfg.enabled,
+      dbPath: cfg.dbPath,
+      resolvedDbPath: abs,
+      exists: fs.existsSync(abs),
+      defaultDbPath: crm.defaultDbPath(),
+    });
+  }
+
+  if (req.method === 'POST' && pathname === '/api/crm/settings') {
+    return readJsonBody(req, res, (b) => {
+      try {
+        const next = setCrmSettings(b || {});
+        const abs = crm.resolveDbPath(next.dbPath);
+        // Auto-init: if the user enabled CRM and the DB doesn't exist yet,
+        // create the file + schema so the dashboard has something to query.
+        if (next.enabled && !fs.existsSync(abs)) {
+          crm.initDb(abs);
+        }
+        return sendJson(res, 200, {
+          ok: true,
+          enabled: next.enabled,
+          dbPath: next.dbPath,
+          resolvedDbPath: abs,
+          exists: fs.existsSync(abs),
+        });
+      } catch (err) {
+        return sendJson(res, 500, { error: 'Failed to save CRM settings: ' + (err && err.message || err) });
+      }
+    });
+  }
+
+  if (req.method === 'POST' && pathname === '/api/crm/init') {
+    // Explicit re-init endpoint — useful if the user points at a fresh path
+    // and wants to seed the schema without toggling enabled off/on.
+    const cfg = getCrmSettings();
+    try {
+      const abs = crm.resolveDbPath(cfg.dbPath);
+      crm.initDb(abs);
+      return sendJson(res, 200, { ok: true, dbPath: abs });
+    } catch (err) {
+      return sendJson(res, 500, { error: err && err.message || String(err) });
+    }
+  }
+
   // ---- model provider (#43) ----
   if (req.method === 'GET' && pathname === '/api/provider') {
     const p = getProviderSettings();
@@ -468,6 +565,14 @@ const server = http.createServer((req, res) => {
   }
   if (req.method === 'GET' && pathname === '/agent/sessions') {
     try { return sendJson(res, 200, { sessions: listAgentSessions(50) }); }
+    catch (err) { return sendJson(res, 500, { error: String(err && err.message || err) }); }
+  }
+  if (req.method === 'GET' && pathname === '/agent/search') {
+    // Full-text search across every stored transcript for a mounted workspace.
+    // Called by the "Past conversations" modal as the user types.
+    const q = String((query && query.q) || '');
+    const limit = Math.max(1, Math.min(100, Number((query && query.limit) || 50)));
+    try { return sendJson(res, 200, { query: q, sessions: searchAgentSessions(q, limit) }); }
     catch (err) { return sendJson(res, 500, { error: String(err && err.message || err) }); }
   }
   if (req.method === 'GET' && pathname === '/agent/session') {
@@ -1691,6 +1796,97 @@ function listAgentSessions(limit) {
     });
   }
   return out;
+}
+
+// Full-text search across every stored transcript whose cwd is inside a
+// mounted workspace. Matches on title/preview + the actual message bodies.
+// Returns the standard session shape plus `hits` (occurrence count) and
+// `snippet` (a window around the first hit) so the UI can render a preview
+// with the matched context.
+function searchAgentSessions(query, limit) {
+  const q = String(query || '').trim();
+  if (!q) return [];
+  limit = limit || 50;
+  const needle = q.toLowerCase();
+  let dirs;
+  try { dirs = fs.readdirSync(CLAUDE_PROJECTS_DIR); } catch { return []; }
+  const files = [];
+  for (const d of dirs) {
+    const full = path.join(CLAUDE_PROJECTS_DIR, d);
+    let entries;
+    try {
+      if (!fs.statSync(full).isDirectory()) continue;
+      entries = fs.readdirSync(full);
+    } catch { continue; }
+    for (const f of entries) {
+      if (!f.endsWith('.jsonl')) continue;
+      const fp = path.join(full, f);
+      try { files.push({ fp, id: f.slice(0, -6), mtime: fs.statSync(fp).mtimeMs }); } catch {}
+    }
+  }
+  files.sort((a, b) => b.mtime - a.mtime);
+  const results = [];
+  for (const file of files) {
+    let raw;
+    try {
+      const st = fs.statSync(file.fp);
+      if (st.size > 60 * 1024 * 1024) continue; // skip absurdly large files
+      raw = fs.readFileSync(file.fp, 'utf8');
+    } catch { continue; }
+    let cwd = '', title = '', preview = '', gitBranch = '', messages = 0;
+    let hits = 0, snippet = '';
+    for (const line of raw.split('\n')) {
+      if (!line) continue;
+      if (line.includes('"type":"assistant"')) messages++;
+      let o; try { o = JSON.parse(line); } catch { continue; }
+      if (o.aiTitle) title = o.aiTitle;
+      if (!cwd && o.cwd) cwd = o.cwd;
+      if (!gitBranch && o.gitBranch) gitBranch = o.gitBranch;
+      if ((o.type === 'user' || o.type === 'assistant') && o.message && !o.isSidechain && !o.isMeta) {
+        const text = cleanTranscriptText(extractUserText(o.message) ||
+          (Array.isArray(o.message.content)
+            ? o.message.content.filter(b => b && b.type === 'text').map(b => b.text || '').join(' ')
+            : ''));
+        if (o.type === 'user' && !preview && text) preview = text.slice(0, 160);
+        if (text) {
+          const lower = text.toLowerCase();
+          let idx = lower.indexOf(needle);
+          while (idx !== -1) {
+            hits++;
+            if (!snippet) {
+              const start = Math.max(0, idx - 60);
+              const end = Math.min(text.length, idx + needle.length + 80);
+              snippet = (start > 0 ? '…' : '') + text.slice(start, end) + (end < text.length ? '…' : '');
+            }
+            idx = lower.indexOf(needle, idx + needle.length);
+          }
+        }
+      }
+    }
+    // Title match counts too, even without a body hit.
+    const titleHit = title && title.toLowerCase().includes(needle);
+    if (!hits && !titleHit) continue;
+    if (!cwd) continue;
+    const root = ROOTS.find(r => cwd === r.path || cwd.startsWith(r.path + path.sep));
+    if (!root) continue;
+    results.push({
+      id: file.id,
+      title: title || preview || 'Conversation',
+      preview,
+      snippet: snippet || preview,
+      hits: hits + (titleHit ? 1 : 0),
+      messages,
+      mtime: file.mtime,
+      cwd,
+      workspace: root.name,
+      gitBranch,
+    });
+    if (results.length >= limit) break;
+  }
+  // Rank: primarily by hit count (more matches = more relevant), then by
+  // recency so ties break in favor of the freshest conversation.
+  results.sort((a, b) => (b.hits - a.hits) || (b.mtime - a.mtime));
+  return results;
 }
 
 function findSessionFile(id) {

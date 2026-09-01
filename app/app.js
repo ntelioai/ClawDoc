@@ -15,6 +15,13 @@
     expanded: new Set(),   // expanded folder paths
     currentDoc: null,
     currentFolder: '',
+    // Active CRM view ('dashboard' | 'report' | null). Kept parallel to
+    // currentDoc so the sidebar highlight follows the click and other
+    // navigation clears it.
+    currentCrm: null,
+    // { enabled, dbPath, resolvedDbPath, exists, defaultDbPath } once
+    // /api/crm/settings resolves; null until then. Sidebar treats null as off.
+    crmSettings: null,
     sortBy: localStorage.getItem('clawdoc.sortBy') || 'date',
     sortDir: localStorage.getItem('clawdoc.sortDir') || 'desc',
     treeFilter: '',
@@ -174,6 +181,67 @@
   }
   function setMovePending(paths, on) {
     for (const p of paths) { if (on) pendingMoveHidden.add(p); else pendingMoveHidden.delete(p); }
+  }
+
+  // Optimistically rewrite the client-side tree/docs after a successful move,
+  // so the item shows up in its destination the instant the /api/move fetch
+  // returns — no waiting for the debounced reindex + SSE round-trip. The
+  // eventual index-changed event will replace state with the authoritative
+  // version; until then, the panes reflect reality.
+  //
+  // Handles both files and folders: for a moved folder, every descendant
+  // doc's path/folder is rewritten to the new prefix so the whole subtree
+  // moves with it.
+  function applyOptimisticMove(oldPath, newPath) {
+    if (!state.docs || oldPath === newPath) return [];
+    const oldPrefix = oldPath + '/';
+    const changed = [];
+    for (const d of state.docs) {
+      if (d.path === oldPath) {
+        d.path = newPath;
+        d.folder = dirname(newPath) || '';
+        changed.push(d);
+      } else if (d.path.startsWith(oldPrefix)) {
+        d.path = newPath + d.path.slice(oldPath.length);
+        d.folder = dirname(d.path) || '';
+        changed.push(d);
+      }
+    }
+    state.docsByPath = new Map(state.docs.map(d => [d.path, d]));
+    // buildTree needs the folder list too so intermediate empty folders survive.
+    const folders = (state.index && Array.isArray(state.index.folders))
+      ? state.index.folders.map(f => {
+          if (f === oldPath) return newPath;
+          if (f.startsWith(oldPrefix)) return newPath + f.slice(oldPath.length);
+          return f;
+        })
+      : [];
+    if (state.index) state.index.folders = folders;
+    state.tree = buildTree(folders, state.docs);
+    return changed;
+  }
+
+  // Briefly flash a row so the user's eye tracks where the moved item landed.
+  // Matches rows in both the MC panes (data-mc-path) and the main tree
+  // (data-sel-path). Applied on the next frame so the row exists post-render.
+  function pulseHighlightPath(p) {
+    if (!p) return;
+    requestAnimationFrame(() => {
+      const esc = (window.CSS && CSS.escape) ? CSS.escape(p) : p;
+      const rows = document.querySelectorAll(
+        `[data-mc-path="${esc}"], [data-sel-path="${esc}"]`
+      );
+      if (!rows.length) return;
+      let scrolled = false;
+      rows.forEach((row) => {
+        row.classList.add('just-moved');
+        if (!scrolled && row.scrollIntoView) {
+          try { row.scrollIntoView({ block: 'nearest', behavior: 'smooth' }); } catch {}
+          scrolled = true;
+        }
+        setTimeout(() => row.classList.remove('just-moved'), 1600);
+      });
+    });
   }
   // Re-render whichever file surfaces are currently visible so an optimistic
   // hide/unhide takes effect immediately.
@@ -508,6 +576,11 @@
   const ICON_TEXT = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/><line x1="10" y1="9" x2="8" y2="9"/></svg>';
   const ICON_FILE = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M13 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9z"/><polyline points="13 2 13 9 20 9"/></svg>';
   const ICON_DOCX = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="8" y1="13" x2="16" y2="13"/><line x1="8" y1="17" x2="16" y2="17"/><line x1="8" y1="9" x2="11" y2="9"/></svg>';
+  // Rounded-square tile with a mini bar chart inside. The tile shape is the
+  // shared visual language for "app module" (not a filesystem folder); the
+  // inner glyph identifies the module. Future special folders should follow
+  // the same pattern with a domain-specific glyph inside the tile.
+  const ICON_CRM_TILE = '<svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor" xmlns="http://www.w3.org/2000/svg"><rect x="1.25" y="1.25" width="13.5" height="13.5" rx="2.75" ry="2.75" fill="none" stroke="currentColor" stroke-width="1.4"/><rect x="3.9" y="9.5" width="1.6" height="3"/><rect x="7.2" y="6.8" width="1.6" height="5.7"/><rect x="10.5" y="4.3" width="1.6" height="8.2"/></svg>';
   const ICON_CHEVRON = '<svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><polyline points="6 9 12 15 18 9"/></svg>';
   const ICON_REFRESH = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></svg>';
   const ICON_CHECK = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>';
@@ -683,10 +756,19 @@
   function renderTree() {
     const root = $('#tree');
     root.innerHTML = '';
+    // Pin the CRM virtual root above all workspaces so it reads as an app-level
+    // menu, not a workspace. Only shown when the user has enabled it in
+    // Settings; otherwise every artifact of the CRM feature stays hidden.
+    if (state.crmSettings && state.crmSettings.enabled) {
+      const crmNode = renderCrmRoot();
+      if (crmNode) root.appendChild(crmNode);
+    }
     const filter = state.treeFilter.trim().toLowerCase();
     const matches = filter ? computeTreeMatches(filter) : null;
-    // Render top-level subfolders, then top-level docs (docs at workspace root).
-    for (const child of sortedChildren(state.tree)) {
+    // Render top-level workspaces in the order set in Settings; unknown
+    // top-level nodes (rare) fall back to alphabetical after them. Subfolders
+    // under each workspace stay alphabetical (see sortedChildren).
+    for (const child of workspaceOrderedChildren(state.tree)) {
       const n = renderNode(child, 0, matches, filter);
       if (n) root.appendChild(n);
     }
@@ -696,10 +778,116 @@
     }
   }
 
+  // The synthetic CRM folder + Dashboard/Report children. These aren't real
+  // paths — clicks route to openCrmView() which loads a bundled HTML view into
+  // the main viewer via an iframe. Expansion state is tracked under the
+  // reserved path key "__crm__" alongside real folder paths.
+  const CRM_ROOT_KEY = '__crm__';
+  function renderCrmRoot() {
+    const isExpanded = state.expanded.has(CRM_ROOT_KEY);
+    const isActive = state.currentCrm === null && state.currentFolder === CRM_ROOT_KEY;
+    const tnode = el('div', { class: 'tnode' + (isExpanded ? '' : ' collapsed') });
+    const chev = el('span', { class: 'tchev', html: ICON_CHEVRON });
+    // Tile stays the same when expanded/collapsed — a module isn't a folder
+    // that opens and closes, so the icon shouldn't swap with expansion state.
+    const icon = el('span', { class: 'ticon', html: ICON_CRM_TILE });
+    const name = el('span', { class: 'tname' }, 'CRM');
+    const row = el('div', {
+      class: 'trow crm-root' + (isActive ? ' active' : ''),
+      draggable: 'false',
+    }, [chev, icon, name]);
+    row.addEventListener('click', (ev) => {
+      const clickedChev = ev.target.closest('.tchev');
+      if (clickedChev) {
+        toggleNode(CRM_ROOT_KEY);
+        return;
+      }
+      if (state.expanded.has(CRM_ROOT_KEY)) state.expanded.delete(CRM_ROOT_KEY);
+      else state.expanded.add(CRM_ROOT_KEY);
+      state.currentFolder = CRM_ROOT_KEY;
+      state.currentDoc = null;
+      renderTree();
+    });
+    tnode.appendChild(row);
+    if (isExpanded) {
+      const children = el('div', { class: 'tchildren' });
+      children.appendChild(renderCrmChild('dashboard', 'Dashboard', ICON_SHEET));
+      children.appendChild(renderCrmChild('report', 'Report', ICON_TEXT));
+      tnode.appendChild(children);
+    }
+    return tnode;
+  }
+  function renderCrmChild(kind, label, iconHtml) {
+    const isActive = state.currentCrm === kind;
+    const tnode = el('div', { class: 'tnode leaf' });
+    const chev = el('span', { class: 'tchev', html: ICON_CHEVRON });
+    const icon = el('span', { class: 'ticon', html: iconHtml });
+    const name = el('span', { class: 'tname' }, label);
+    const row = el('div', {
+      class: 'trow doc-row crm-child' + (isActive ? ' active' : ''),
+      draggable: 'false',
+    }, [chev, icon, name]);
+    row.addEventListener('click', () => openCrmView(kind));
+    tnode.appendChild(row);
+    return tnode;
+  }
+
+  // Render a CRM view (dashboard/report) into the main viewer as an iframe.
+  // No tab/persistence entanglement: reloading the page returns to the last
+  // real doc; CRM views are always one click away in the sidebar.
+  function openCrmView(kind) {
+    if (kind !== 'dashboard' && kind !== 'report') return;
+    if (!confirmDiscardEdits()) return;
+    state.currentDoc = null;
+    state.currentCrm = kind;
+    state.currentFolder = CRM_ROOT_KEY;
+    state.expanded.add(CRM_ROOT_KEY);
+    renderTree();
+    renderBreadcrumb();
+    renderCrmViewInto($('#viewer'), kind);
+    const h = '#crm=' + kind;
+    if (location.hash !== h) {
+      if (!location.hash) history.replaceState({ clawdoc: true }, '', location.pathname + h);
+      else history.pushState({ clawdoc: true }, '', location.pathname + h);
+    }
+    document.title = 'CRM · ' + (kind === 'dashboard' ? 'Dashboard' : 'Report');
+  }
+  function renderCrmViewInto(host, kind) {
+    disposeSpreadsheet();
+    disposeSuperdoc();
+    disposeCodeEditor();
+    host.innerHTML = '';
+    const wrap = el('div', { class: 'html-frame-wrap crm-frame-wrap' });
+    const iframe = el('iframe', {
+      class: 'html-frame crm-frame',
+      src: '/crm/' + kind,
+      // No sandbox: the CRM views are first-party (bundled with the app) and
+      // need to call /api/crm/funnel.json on the same origin.
+    });
+    wrap.appendChild(iframe);
+    host.appendChild(wrap);
+  }
+
   function sortedChildren(node) {
     return Array.from(node.children.values())
       .filter(n => !pendingMoveHidden.has(n.path))
       .sort((a, b) => a.name.localeCompare(b.name));
+  }
+
+  // Top-level tree ordering: mirror the workspace order the user set in
+  // Settings so reordering there flows through to the sidebar. Anything not
+  // in the roots list (shouldn't happen in practice) falls back to alphabetical.
+  function workspaceOrderedChildren(rootNode) {
+    const kids = Array.from(rootNode.children.values())
+      .filter(n => !pendingMoveHidden.has(n.path));
+    const order = ((state.index && state.index.roots) || []).map(r => r.name);
+    const rank = new Map(order.map((n, i) => [n, i]));
+    return kids.sort((a, b) => {
+      const ra = rank.has(a.name) ? rank.get(a.name) : Infinity;
+      const rb = rank.has(b.name) ? rank.get(b.name) : Infinity;
+      if (ra !== rb) return ra - rb;
+      return a.name.localeCompare(b.name);
+    });
   }
   function sortedTreeDocs(node) {
     // Alphabetical by title (falling back to filename). Tree sort is independent
@@ -1014,6 +1202,7 @@
     }
     if (!confirmDiscardEdits()) return;
     state.currentDoc = null;
+    state.currentCrm = null;
     state.currentFolder = folderPath;
     // Make sure ancestors are open so the folder is visible in the tree, but
     // leave the folder's own expansion state alone — the click handler decides
@@ -1061,6 +1250,7 @@
       if (!confirmDiscardEdits()) return;
     }
     state.currentDoc = doc;
+    state.currentCrm = null;
     state.currentFolder = doc.folder === '.' ? '' : doc.folder;
     expandFolderAndAncestors(state.currentFolder);
     persistTabs();
@@ -1096,6 +1286,11 @@
   function applyHash() {
     const h = location.hash.replace(/^#/, '');
     const params = new URLSearchParams(h);
+    if (params.has('crm')) {
+      const kind = params.get('crm');
+      if (state.currentCrm !== kind) openCrmView(kind);
+      return;
+    }
     if (params.has('doc')) {
       const p = params.get('doc');
       const a = params.get('a') || '';
@@ -2912,6 +3107,126 @@
     } catch {}
   }
 
+  async function loadCrmSettings() {
+    try {
+      const r = await fetch('/api/crm/settings');
+      if (r.ok) state.crmSettings = await r.json();
+    } catch {}
+  }
+
+  // CRM settings panel: enable toggle + editable DB path. On save the server
+  // auto-creates the sqlite file + schema if it doesn't exist yet, so users
+  // only have to flip one switch to get a working CRM.
+  function renderCrmSection() {
+    const section = el('div', { class: 'settings-section' });
+    section.appendChild(el('h3', null, 'CRM'));
+    const cur = state.crmSettings;
+    if (!cur) {
+      section.appendChild(el('div', { class: 'settings-help' }, 'Loading…'));
+      return section;
+    }
+
+    section.appendChild(el('div', { class: 'settings-help' },
+      'When enabled, a "CRM" folder appears above your workspaces in the ' +
+      'sidebar with Dashboard and Report views backed by a local SQLite ' +
+      'database. Deal data never leaves your machine.'));
+
+    const list = el('div', { class: 'settings-list' });
+    const mkRow = (label, control) => {
+      const row = el('div', { class: 'settings-row' });
+      row.appendChild(el('span', { class: 'sr-key' }, label));
+      row.appendChild(control);
+      return row;
+    };
+
+    // Enable toggle
+    const enableWrap = el('label', { class: 'settings-toggle' });
+    const enableInput = el('input', { type: 'checkbox' });
+    if (cur.enabled) enableInput.checked = true;
+    enableWrap.appendChild(enableInput);
+    enableWrap.appendChild(el('span', null, cur.enabled ? 'Enabled' : 'Disabled'));
+    enableInput.addEventListener('change', () => {
+      enableWrap.querySelector('span').textContent = enableInput.checked ? 'Enabled' : 'Disabled';
+    });
+    list.appendChild(mkRow('CRM sidebar', enableWrap));
+
+    // DB path
+    const pathInput = el('input', {
+      type: 'text', class: 'settings-input',
+      placeholder: cur.defaultDbPath,
+      spellcheck: 'false', autocomplete: 'off',
+      value: cur.dbPath || '',
+    });
+    list.appendChild(mkRow('Database path', pathInput));
+
+    const pickRow = el('div', { class: 'settings-row' });
+    pickRow.appendChild(el('span', { class: 'sr-key' }, ''));
+    const browseWrap = el('div', { class: 'settings-inline-actions' });
+    const browseBtn = el('button', { title: 'Pick a folder for the sqlite file' }, 'Browse folder…');
+    browseBtn.addEventListener('click', async () => {
+      browseBtn.textContent = '…';
+      const p = await pickFolder();
+      browseBtn.textContent = 'Browse folder…';
+      if (p) pathInput.value = p.replace(/\/$/, '') + '/crm.sqlite';
+    });
+    browseWrap.appendChild(browseBtn);
+    const defaultBtn = el('button', { title: 'Use ' + cur.defaultDbPath }, 'Use default');
+    defaultBtn.addEventListener('click', () => { pathInput.value = ''; });
+    browseWrap.appendChild(defaultBtn);
+    pickRow.appendChild(browseWrap);
+    list.appendChild(pickRow);
+
+    // Status: does the file exist?
+    const statusText = cur.exists
+      ? 'Database found: ' + cur.resolvedDbPath
+      : 'Database will be created at: ' + cur.resolvedDbPath;
+    list.appendChild(mkRow('Status', el('span', { class: 'sr-val' }, statusText)));
+
+    section.appendChild(list);
+
+    // Save + status
+    const saveRow = el('div', { class: 'settings-row settings-save-row' });
+    const status = el('span', { class: 'settings-status' });
+    saveRow.appendChild(el('span', { class: 'sr-val' },
+      cur.enabled ? 'CRM active.' : 'CRM disabled — sidebar folder hidden.'));
+    saveRow.appendChild(status);
+    const saveBtn = el('button', { class: 'btn-primary' }, 'Save CRM settings');
+    saveBtn.addEventListener('click', async () => {
+      saveBtn.disabled = true;
+      status.textContent = enableInput.checked ? 'Saving…' : 'Saving…';
+      status.className = 'settings-status';
+      try {
+        const r = await fetch('/api/crm/settings', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            enabled: !!enableInput.checked,
+            dbPath: pathInput.value,
+          }),
+        });
+        const data = await r.json();
+        if (!r.ok || !data.ok) throw new Error(data.error || ('HTTP ' + r.status));
+        state.crmSettings = {
+          enabled: data.enabled, dbPath: data.dbPath,
+          resolvedDbPath: data.resolvedDbPath, exists: data.exists,
+          defaultDbPath: cur.defaultDbPath,
+        };
+        status.textContent = 'Saved ✓';
+        status.className = 'settings-status ok';
+        // Refresh the sidebar so the CRM root shows/hides immediately.
+        try { renderTree(); } catch {}
+        setTimeout(() => { if (!$('#settings-modal').classList.contains('hidden')) renderSettings(); }, 700);
+      } catch (err) {
+        status.textContent = 'Error: ' + err.message;
+        status.className = 'settings-status error';
+        saveBtn.disabled = false;
+      }
+    });
+    saveRow.appendChild(saveBtn);
+    section.appendChild(saveRow);
+    return section;
+  }
+
   function renderProviderSection() {
     const section = el('div', { class: 'settings-section' });
     section.appendChild(el('h3', null, 'Model provider'));
@@ -3044,6 +3359,9 @@
     loadProviderSettings().then(() => {
       if (!$('#settings-modal').classList.contains('hidden')) renderSettings();
     });
+    loadCrmSettings().then(() => {
+      if (!$('#settings-modal').classList.contains('hidden')) renderSettings();
+    });
   }
   function closeSettings() {
     delete state.editingWorkspaces;
@@ -3067,6 +3385,14 @@
     if (state.settingsBusy) return;
     const list = state.editingWorkspaces || [];
     if (!list.length) { statusEl.textContent = 'Need at least one workspace.'; statusEl.className = 'settings-status error'; return; }
+    const currentList = ((state.index && state.index.roots) || []).map(r => r.path);
+    // Reorder-only: same set of paths, different order. Nothing on disk moved,
+    // so skip the filesystem walk — just persist the new order and re-sort the
+    // sidebar locally (workspaceOrderedChildren reads state.index.roots).
+    const reorderOnly = list.length === currentList.length &&
+      new Set(list).size === list.length &&
+      list.every(p => currentList.includes(p)) &&
+      list.join('\n') !== currentList.join('\n');
     state.settingsBusy = true;
     statusEl.textContent = 'Saving…';
     statusEl.className = 'settings-status';
@@ -3078,6 +3404,17 @@
       });
       const data = await r.json();
       if (!r.ok || !data.ok) throw new Error(data.error || ('HTTP ' + r.status));
+      if (reorderOnly) {
+        // Server returns the new ROOTS in order — patch state.index.roots so
+        // the sidebar re-sorts without a full reindex.
+        if (state.index && Array.isArray(data.workspaces)) state.index.roots = data.workspaces;
+        delete state.editingWorkspaces;
+        renderTree();
+        statusEl.textContent = 'Reordered ✓';
+        statusEl.className = 'settings-status ok';
+        setTimeout(() => closeSettings(), 700);
+        return;
+      }
       statusEl.textContent = 'Reindexing…';
       const rr = await fetch('/api/reindex', { method: 'POST' });
       const rd = await rr.json();
@@ -3141,6 +3478,22 @@
       const baseName = p.split('/').filter(Boolean).pop() || p;
       row.appendChild(el('span', { class: 'sr-key' }, baseName));
       row.appendChild(el('span', { class: 'sr-val', title: p }, p));
+      // Up/down reorder — order here maps 1:1 to the sidebar order, so this
+      // is how the user promotes a frequently-used workspace to the top.
+      const upBtn = el('button', { class: 'ws-move', title: 'Move up' }, '▲');
+      upBtn.disabled = i === 0;
+      upBtn.addEventListener('click', () => {
+        [editList[i - 1], editList[i]] = [editList[i], editList[i - 1]];
+        renderSettings();
+      });
+      row.appendChild(upBtn);
+      const downBtn = el('button', { class: 'ws-move', title: 'Move down' }, '▼');
+      downBtn.disabled = i === editList.length - 1;
+      downBtn.addEventListener('click', () => {
+        [editList[i + 1], editList[i]] = [editList[i], editList[i + 1]];
+        renderSettings();
+      });
+      row.appendChild(downBtn);
       const removeBtn = el('button', { class: 'danger', title: 'Remove this workspace' }, '−');
       removeBtn.disabled = minRows <= 1;
       removeBtn.addEventListener('click', () => {
@@ -3199,8 +3552,15 @@
     const dirty = JSON.stringify(currentList) !== JSON.stringify(editList);
     const statusEl = el('span', { class: 'settings-status' });
     if (dirty) {
+      // Detect reorder-only (same set of paths, different order) so we can
+      // tell the user we won't be reindexing, and label the button honestly.
+      const reorderOnly = editList.length === currentList.length &&
+        new Set(editList).size === editList.length &&
+        editList.every(p => currentList.includes(p));
       const saveRow = el('div', { class: 'settings-row settings-save-row' });
-      const msg = el('span', { class: 'sr-val' }, 'Pending changes — applies to settings.json and reindex.');
+      const msg = el('span', { class: 'sr-val' }, reorderOnly
+        ? 'Pending reorder — no reindex needed.'
+        : 'Pending changes — applies to settings.json and reindex.');
       saveRow.appendChild(msg);
       saveRow.appendChild(statusEl);
       const resetBtn = el('button', null, 'Revert');
@@ -3209,7 +3569,7 @@
         renderSettings();
       });
       saveRow.appendChild(resetBtn);
-      const saveBtn = el('button', { class: 'btn-primary' }, 'Save & reindex');
+      const saveBtn = el('button', { class: 'btn-primary' }, reorderOnly ? 'Save order' : 'Save & reindex');
       saveBtn.addEventListener('click', () => saveWorkspacesAndReindex(statusEl));
       saveRow.appendChild(saveBtn);
       wsSection.appendChild(saveRow);
@@ -3227,6 +3587,10 @@
     const claudePanel = tab('claude', 'Claude');
     claudePanel.appendChild(renderClaudeClientSection());
     claudePanel.appendChild(renderProviderSection());
+
+    // CRM (sales pipeline) — optional feature; when enabled, adds a virtual
+    // "CRM" root above the workspaces with Dashboard + Report children.
+    tab('crm', 'CRM').appendChild(renderCrmSection());
 
     // Stats
     const indexPanel = tab('index', 'Index');
@@ -4127,6 +4491,7 @@
   // the two can be compared. Event shapes: docs/roadmap/stream-json-notes.md.
   const AGENT_THEME_KEY = 'clawdoc:agentTheme';
   const AGENT_TABS_KEY = 'clawdoc:agentTabs';
+  const AGENT_MODE_KEY = 'clawdoc:agentMode';
   const MODE_LABELS = {
     acceptEdits: 'Edit automatically',
     default: 'Ask before edits',
@@ -4134,6 +4499,16 @@
     bypassPermissions: 'Auto (no prompts)',
   };
   const DEFAULT_AGENT_MODE = 'acceptEdits';
+  // Preferred mode for NEW chat tabs — the last mode the user explicitly
+  // picked from the dropdown, persisted across reloads. Only user-initiated
+  // changes update it; runtime mode switches sent by Claude itself don't.
+  function preferredAgentMode() {
+    try {
+      const v = localStorage.getItem(AGENT_MODE_KEY);
+      if (v && MODE_LABELS[v]) return v;
+    } catch {}
+    return DEFAULT_AGENT_MODE;
+  }
 
   // #63 — the client holds several independent conversations ("tabs"). UI-level
   // state lives on `agent`; each conversation's own state (its own stream, log
@@ -4168,7 +4543,7 @@
       sessionWorkspace: opts.workspace || '',
       cwd: opts.cwd || '',                   // absolute cwd, for path links + resume
       model: opts.model || '',
-      mode: opts.mode || DEFAULT_AGENT_MODE,
+      mode: opts.mode || preferredAgentMode(),
       running: false,
       stopping: false,
       activeAssistant: null,
@@ -4911,8 +5286,16 @@
   async function agOpenHistory() {
     const overlay = el('div', { class: 'agent-history-overlay', 'data-term-theme': agent.theme });
     const modal = el('div', { class: 'agent-history-modal' });
+    const searchInput = el('input', {
+      type: 'search',
+      class: 'agent-history-search',
+      placeholder: 'Search past conversations…',
+      spellcheck: 'false',
+      autocomplete: 'off',
+    });
     const head = el('div', { class: 'agent-history-head' }, [
       el('span', { class: 'agent-history-title' }, 'Past conversations'),
+      searchInput,
       el('button', { class: 'agent-history-close', title: 'Close', 'aria-label': 'Close' }, '✕'),
     ]);
     const listWrap = el('div', { class: 'agent-history-list' }, el('div', { class: 'agent-history-empty' }, 'Loading…'));
@@ -4926,38 +5309,100 @@
     const onEsc = (e) => { if (e.key === 'Escape') { close(); document.removeEventListener('keydown', onEsc, true); } };
     document.addEventListener('keydown', onEsc, true);
 
-    let sessions = [];
-    try {
-      const r = await fetch('/agent/sessions');
-      if (!r.ok) throw new Error('HTTP ' + r.status);
-      sessions = (await r.json()).sessions || [];
-    } catch (err) {
+    // Highlight every occurrence of the query inside a snippet so the match
+    // is visible without the user re-scanning the text.
+    function renderSnippet(text, q) {
+      const container = el('div', { class: 'agent-history-item-preview' });
+      if (!q) { container.textContent = text || ''; return container; }
+      const src = text || '';
+      const needle = q.toLowerCase();
+      let i = 0;
+      const lower = src.toLowerCase();
+      while (i < src.length) {
+        const idx = lower.indexOf(needle, i);
+        if (idx === -1) { container.appendChild(document.createTextNode(src.slice(i))); break; }
+        if (idx > i) container.appendChild(document.createTextNode(src.slice(i, idx)));
+        const mark = el('mark', null, src.slice(idx, idx + needle.length));
+        container.appendChild(mark);
+        i = idx + needle.length;
+      }
+      return container;
+    }
+
+    function renderSessions(sessions, query) {
       listWrap.innerHTML = '';
-      listWrap.appendChild(el('div', { class: 'agent-history-empty' }, 'Could not load history: ' + (err && err.message || err)));
-      return;
+      if (!sessions.length) {
+        const msg = query
+          ? 'No conversations match “' + query + '”.'
+          : 'No past conversations found for these workspaces yet.';
+        listWrap.appendChild(el('div', { class: 'agent-history-empty' }, msg));
+        return;
+      }
+      for (const sess of sessions) {
+        const row = el('div', { class: 'agent-history-item' });
+        const bodyText = query ? (sess.snippet || sess.preview || '') : (sess.preview || '');
+        const main = el('div', { class: 'agent-history-item-main' }, [
+          el('div', { class: 'agent-history-item-title' }, sess.title || 'Conversation'),
+          renderSnippet(bodyText, query),
+        ]);
+        const metaChildren = [
+          el('span', { class: 'agent-history-item-ws' }, sess.workspace || ''),
+          el('span', {}, agRelTime(sess.mtime)),
+          el('span', {}, (sess.messages || 0) + ' turns'),
+        ];
+        if (query && sess.hits) {
+          metaChildren.push(el('span', { class: 'agent-history-item-hits' }, sess.hits + ' hit' + (sess.hits === 1 ? '' : 's')));
+        }
+        const meta = el('div', { class: 'agent-history-item-meta' }, metaChildren);
+        row.appendChild(main);
+        row.appendChild(meta);
+        row.addEventListener('click', () => { close(); document.removeEventListener('keydown', onEsc, true); agRestoreSession(sess); });
+        listWrap.appendChild(row);
+      }
     }
-    if (!sessions.length) {
+
+    // Prime with the recent-list; searches replace it on debounce.
+    let currentQuery = '';
+    let searchReq = 0;
+    async function loadRecent() {
+      currentQuery = '';
+      try {
+        const r = await fetch('/agent/sessions');
+        if (!r.ok) throw new Error('HTTP ' + r.status);
+        const sessions = (await r.json()).sessions || [];
+        if (searchInput.value.trim()) return; // user has since typed a query
+        renderSessions(sessions, '');
+      } catch (err) {
+        listWrap.innerHTML = '';
+        listWrap.appendChild(el('div', { class: 'agent-history-empty' }, 'Could not load history: ' + (err && err.message || err)));
+      }
+    }
+    async function runSearch(q) {
+      const my = ++searchReq;
+      currentQuery = q;
       listWrap.innerHTML = '';
-      listWrap.appendChild(el('div', { class: 'agent-history-empty' }, 'No past conversations found for these workspaces yet.'));
-      return;
+      listWrap.appendChild(el('div', { class: 'agent-history-empty' }, 'Searching…'));
+      try {
+        const r = await fetch('/agent/search?q=' + encodeURIComponent(q));
+        if (!r.ok) throw new Error('HTTP ' + r.status);
+        const data = await r.json();
+        if (my !== searchReq) return; // superseded by a later keystroke
+        renderSessions(data.sessions || [], q);
+      } catch (err) {
+        if (my !== searchReq) return;
+        listWrap.innerHTML = '';
+        listWrap.appendChild(el('div', { class: 'agent-history-empty' }, 'Search failed: ' + (err && err.message || err)));
+      }
     }
-    listWrap.innerHTML = '';
-    for (const sess of sessions) {
-      const row = el('div', { class: 'agent-history-item' });
-      const main = el('div', { class: 'agent-history-item-main' }, [
-        el('div', { class: 'agent-history-item-title' }, sess.title || 'Conversation'),
-        el('div', { class: 'agent-history-item-preview' }, sess.preview || ''),
-      ]);
-      const meta = el('div', { class: 'agent-history-item-meta' }, [
-        el('span', { class: 'agent-history-item-ws' }, sess.workspace || ''),
-        el('span', {}, agRelTime(sess.mtime)),
-        el('span', {}, (sess.messages || 0) + ' turns'),
-      ]);
-      row.appendChild(main);
-      row.appendChild(meta);
-      row.addEventListener('click', () => { close(); document.removeEventListener('keydown', onEsc, true); agRestoreSession(sess); });
-      listWrap.appendChild(row);
-    }
+
+    const debounced = debounce((q) => {
+      if (!q) loadRecent();
+      else runSearch(q);
+    }, 180);
+    searchInput.addEventListener('input', () => debounced(searchInput.value.trim()));
+
+    loadRecent();
+    setTimeout(() => { try { searchInput.focus(); } catch {} }, 0);
   }
 
   // ---- context / @-insert ----
@@ -5170,8 +5615,11 @@
     $('#agent-insert').addEventListener('click', agentInsertPath);
     $('#agent-context').addEventListener('click', () => { if ($('#agent-context').hasAttribute('data-insertable')) agentInsertPath(); });
     const modeSel = $('#agent-mode');
-    modeSel.value = DEFAULT_AGENT_MODE;
+    modeSel.value = preferredAgentMode();
     modeSel.addEventListener('change', () => {
+      // Persist the pick so newly opened chat tabs inherit this mode instead
+      // of resetting to DEFAULT_AGENT_MODE every time.
+      try { localStorage.setItem(AGENT_MODE_KEY, modeSel.value); } catch {}
       const s = AS();
       if (!s) return;
       s.mode = modeSel.value;
@@ -6426,16 +6874,20 @@
       if (!r.ok || !data.ok) throw new Error(data.error || ('HTTP ' + r.status));
       if (data.unchanged) { setMovePending([srcPath], false); refreshFileViews(); toast.dismiss(); return; }
       setStatus('moved → ' + (destFolderPath || data.newPath.split('/')[0] + '/'), 'ok');
-      // SSE/chokidar will refresh the panes once the indexer catches up;
-      // until then, optimistically auto-expand the destination in both panes
-      // so the moved file is visible when the new index arrives.
       const dest = destFolderPath || dropWorkspace(srcPath);
+      // Expand the destination in both panes + main tree so the arrival lands
+      // somewhere visible (rather than inside a still-collapsed folder).
       state.mcPanes.a.expanded.add(dest);
       state.mcPanes.b.expanded.add(dest);
       persistMcPanes();
-      // Same optimism for the main sidebar tree, so a file dragged from the
-      // listing pane into a tree folder lands somewhere already visible.
       state.expanded.add(dest);
+      // Optimistically apply the move to state.docs/state.tree so the item
+      // shows up in the destination immediately. The eventual index-changed
+      // SSE event will replace this with the authoritative reindexed state.
+      setMovePending([srcPath], false);
+      applyOptimisticMove(srcPath, data.newPath);
+      refreshFileViews();
+      pulseHighlightPath(data.newPath);
       // Undo = move the item from its new location back to its original parent.
       // A bare workspace name (no slash) means the original parent was the
       // workspace root; '' resolves to the source's workspace root server-side.
@@ -6482,6 +6934,11 @@
           if (!data.unchanged) {
             const origParent = dirname(srcPath);
             moved.push({ newPath: data.newPath, undoDest: origParent.includes('/') ? origParent : '' });
+            // Apply the optimistic rewrite as each item succeeds so the panes
+            // fill in incrementally — long batches feel responsive instead of
+            // silent for their full duration.
+            setMovePending([srcPath], false);
+            applyOptimisticMove(srcPath, data.newPath);
           } else {
             setMovePending([srcPath], false); // no-op move — keep it visible
           }
@@ -6490,6 +6947,9 @@
     } finally {
       endFileOp();
       refreshFileViews(); // reflect any reverted rows immediately
+      // Flash every landed item at once — clearer than per-item pulses during
+      // a batch, and points the eye at the whole set that just arrived.
+      for (const m of moved) pulseHighlightPath(m.newPath);
     }
     const dest = destFolderPath || '';
     if (dest) { state.expanded.add(dest); state.mcPanes.a.expanded.add(dest); state.mcPanes.b.expanded.add(dest); persistMcPanes(); }
@@ -7233,6 +7693,10 @@
       loadIndex();
       return;
     }
+
+    // Load CRM settings early so the sidebar can decide whether to render the
+    // virtual "CRM" root. Re-render if it arrives after the first tree paint.
+    loadCrmSettings().then(() => { try { renderTree(); } catch {} });
 
     $('#search').addEventListener('input', (e) => runSearch(e.target.value));
     $('#search').addEventListener('focus', () => {

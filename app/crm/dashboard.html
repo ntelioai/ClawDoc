@@ -1,0 +1,466 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Pipeline Funnel — ntelio CRM</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Kanit:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+:root{
+  --bg:#f3f3ef; --bg-alt:#ebeae4; --bg-deep:#e6e4dc;
+  --ink:#0c1f28; --ink-soft:#2b3f48; --muted:#6e7a82;
+  --teal:#3e7b97; --teal-deep:#2a5a72;
+  --teal-glow:rgba(62,123,151,.10); --teal-glow-soft:rgba(62,123,151,.05);
+  --hairline:#d4d2cb; --hairline-strong:#b9b7af;
+  --display:"Kanit",system-ui,sans-serif;
+  --mono:"JetBrains Mono",ui-monospace,SFMono-Regular,Menlo,monospace;
+  --max:1320px; --gutter:clamp(1.25rem,4vw,3rem);
+}
+
+*{box-sizing:border-box}
+html,body{margin:0;padding:0}
+body{
+  background:var(--bg);
+  color:var(--ink);
+  font-family:var(--display);
+  font-weight:400;
+  line-height:1.45;
+  -webkit-font-smoothing:antialiased;
+  background-image:
+    radial-gradient(1200px 600px at 85% -10%, var(--teal-glow), transparent 60%),
+    radial-gradient(900px 500px at -10% 110%, var(--teal-glow-soft), transparent 60%);
+  min-height:100vh;
+}
+
+.wrap{max-width:var(--max);margin:0 auto;padding:clamp(1.5rem,4vw,3rem) var(--gutter)}
+
+/* ---------- Header ---------- */
+header{
+  display:flex;align-items:flex-end;justify-content:space-between;
+  gap:2rem;padding-bottom:1.5rem;border-bottom:1px solid var(--hairline);
+  margin-bottom:2.5rem;flex-wrap:wrap;
+}
+.brand{display:flex;flex-direction:column;gap:.35rem}
+.brand .eyebrow{
+  font-size:.72rem;letter-spacing:.22em;text-transform:uppercase;
+  color:var(--teal);font-weight:500;
+}
+.brand h1{
+  margin:0;font-family:var(--display);font-weight:500;
+  font-size:clamp(1.85rem,3.4vw,2.75rem);letter-spacing:-.015em;
+  color:var(--ink);line-height:1.05;
+}
+.brand h1 em{font-style:normal;color:var(--teal)}
+.meta{
+  text-align:right;color:var(--muted);font-family:var(--mono);
+  font-size:.78rem;line-height:1.65;
+}
+.meta code{color:var(--ink-soft)}
+
+.header-right{
+  display:flex;flex-direction:column;align-items:flex-end;gap:.85rem;
+}
+.btn-pdf{
+  font-family:var(--display);font-weight:500;font-size:.82rem;
+  letter-spacing:.02em;
+  padding:.5rem .95rem;
+  border:1px solid var(--teal);
+  background:var(--teal);color:#fff;
+  border-radius:2px;cursor:pointer;
+  display:inline-flex;align-items:center;gap:.45rem;
+  transition:background .15s ease,border-color .15s ease,transform .05s ease;
+}
+.btn-pdf:hover{background:var(--teal-deep);border-color:var(--teal-deep)}
+.btn-pdf:active{transform:translateY(1px)}
+.btn-pdf svg{width:14px;height:14px;stroke:currentColor;fill:none}
+
+/* ---------- Summary tiles ---------- */
+.summary{
+  display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));
+  gap:1px;background:var(--hairline);
+  border:1px solid var(--hairline);border-radius:2px;overflow:hidden;
+  margin-bottom:3rem;
+}
+.tile{background:var(--bg);padding:1.25rem 1.35rem;display:flex;flex-direction:column;gap:.35rem}
+.tile .label{
+  font-size:.68rem;letter-spacing:.2em;text-transform:uppercase;
+  color:var(--muted);font-weight:500;
+}
+.tile .count{
+  font-family:var(--mono);font-size:1.85rem;font-weight:500;
+  color:var(--ink);line-height:1;margin-top:.15rem;
+}
+.tile .money{
+  font-family:var(--mono);font-size:.85rem;color:var(--ink-soft);margin-top:.35rem;
+}
+.tile .weighted{font-family:var(--mono);font-size:.75rem;color:var(--muted)}
+.tile.open .count{color:var(--teal-deep)}
+.tile.won .count{color:#2e7d55}
+.tile.lost .count{color:#b34a4a}
+
+/* ---------- Section titles ---------- */
+.section-title{
+  display:flex;align-items:baseline;gap:.75rem;
+  margin:0 0 1.25rem;font-weight:500;font-size:1.15rem;letter-spacing:-.005em;
+}
+.section-title .rule{
+  flex:1;height:1px;background:var(--hairline);align-self:center;
+}
+.section-title .hint{
+  font-family:var(--mono);font-size:.72rem;color:var(--muted);font-weight:400;
+}
+
+/* ---------- Funnel (SVG) ---------- */
+.funnel{
+  background:var(--bg-alt);border:1px solid var(--hairline);
+  border-radius:2px;padding:1.75rem 1.25rem;margin-bottom:3rem;
+}
+.funnel-svg{width:100%;display:block;overflow:visible}
+.funnel-svg .slice{
+  fill:var(--teal);fill-opacity:.92;
+  stroke:var(--bg-alt);stroke-width:2;
+  transition:fill-opacity .18s ease;
+  cursor:default;
+}
+.funnel-svg .slice:hover{fill-opacity:1}
+.funnel-svg .slice.won {fill:#2e7d55}
+.funnel-svg .slice.lost{fill:#b34a4a}
+.funnel-svg text{font-family:var(--display)}
+.funnel-svg text.stage-name{font-weight:500;font-size:14px;fill:var(--ink)}
+.funnel-svg text.stage-sub {font-family:var(--mono);font-size:10.5px;fill:var(--muted)}
+.funnel-svg text.value-in  {font-family:var(--mono);font-weight:500;font-size:13px;fill:#fff;pointer-events:none}
+.funnel-svg text.value-out {font-family:var(--mono);font-size:13px;fill:var(--ink-soft)}
+.funnel-svg text.weighted  {font-family:var(--mono);font-size:10.5px;fill:var(--muted)}
+
+/* ---------- Deal table ---------- */
+.stage-group{margin-bottom:2rem}
+.stage-group summary{
+  cursor:pointer;list-style:none;
+  display:flex;align-items:baseline;gap:.75rem;
+  padding:.65rem .85rem;background:var(--bg-alt);
+  border:1px solid var(--hairline);border-radius:2px;
+  font-weight:500;font-size:.95rem;
+}
+.stage-group summary::-webkit-details-marker{display:none}
+.stage-group summary::before{
+  content:"›";display:inline-block;transition:transform .2s ease;
+  color:var(--teal);font-family:var(--mono);font-size:1.1rem;line-height:1;
+}
+.stage-group[open] summary::before{transform:rotate(90deg)}
+.stage-group summary .count-pill{
+  margin-left:auto;font-family:var(--mono);font-size:.72rem;
+  color:var(--muted);font-weight:400;
+}
+.stage-group summary .stage-name{text-transform:capitalize}
+
+table.deals{
+  width:100%;border-collapse:collapse;margin-top:.5rem;
+  font-size:.82rem;
+}
+table.deals th,table.deals td{
+  padding:.6rem .85rem;text-align:left;
+  border-bottom:1px solid var(--hairline);
+  vertical-align:top;
+}
+table.deals th{
+  font-weight:500;font-size:.68rem;letter-spacing:.15em;
+  text-transform:uppercase;color:var(--muted);
+  border-bottom:1px solid var(--hairline-strong);
+}
+table.deals td.num{font-family:var(--mono);text-align:right;white-space:nowrap}
+table.deals tbody tr:hover{background:var(--bg-alt)}
+table.deals .title{font-weight:500;color:var(--ink)}
+table.deals .org{color:var(--ink-soft)}
+table.deals .contact{color:var(--muted);font-size:.75rem}
+table.deals .prob{color:var(--muted)}
+
+footer{
+  margin-top:4rem;padding-top:1.5rem;border-top:1px solid var(--hairline);
+  color:var(--muted);font-family:var(--mono);font-size:.72rem;
+  display:flex;justify-content:space-between;flex-wrap:wrap;gap:1rem;
+}
+
+.error-box{
+  padding:1.5rem;border:1px solid var(--hairline-strong);
+  background:var(--bg-alt);border-radius:2px;color:var(--ink-soft);
+  font-family:var(--mono);font-size:.85rem;line-height:1.6;
+}
+.error-box strong{color:var(--ink);font-family:var(--display);font-weight:500}
+.error-box code{
+  background:var(--bg-deep);padding:.15rem .4rem;border-radius:2px;
+  border:1px solid var(--hairline);font-size:.8em;
+}
+
+@media (max-width:720px){
+  header{align-items:flex-start}
+  .meta{text-align:left}
+  .header-right{align-items:flex-start}
+}
+
+/* ---------- Print (Save as PDF) ---------- */
+@media print {
+  @page { size: A4; margin: 14mm; }
+  html,body{background:#fff !important;color:#111;
+    background-image:none !important}
+  .wrap{max-width:none;padding:0}
+  .btn-pdf,.no-print{display:none !important}
+  header{border-color:#000;margin-bottom:1rem;page-break-after:avoid}
+  .brand h1,.brand h1 em,.brand .eyebrow{color:#111}
+  .meta{color:#333}
+  .summary{border-color:#999;page-break-inside:avoid;margin-bottom:1.25rem}
+  .tile{background:#fff}
+  .tile.open .count,.tile.won .count,.tile.lost .count{color:#111}
+  .section-title{page-break-after:avoid;margin-top:1rem}
+  .section-title .rule{background:#999}
+  .funnel{background:#fff;border-color:#999;padding:1rem;page-break-inside:avoid}
+  .funnel-svg .slice{stroke:#fff}
+  .stage-group{page-break-inside:avoid;margin-bottom:.75rem}
+  .stage-group summary{background:#eee;border-color:#999}
+  .stage-group summary::before{display:none}
+  details > *:not(summary){display:block !important}
+  table.deals th{color:#333;border-color:#999}
+  table.deals td{border-color:#ddd}
+  footer{border-color:#999;color:#555;margin-top:1.5rem}
+}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<header>
+  <div class="brand">
+    <div class="eyebrow">ntelio · CRM</div>
+    <h1>Pipeline <em>Funnel</em></h1>
+  </div>
+  <div class="header-right">
+    <button class="btn-pdf" onclick="window.print()"
+            title="Opens the browser print dialog — pick 'Save as PDF'">
+      <svg viewBox="0 0 24 24" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+        <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+        <polyline points="7 10 12 15 17 10"/>
+        <line x1="12" y1="15" x2="12" y2="3"/>
+      </svg>
+      Save to PDF
+    </button>
+    <div class="meta" id="meta">Loading…</div>
+  </div>
+</header>
+
+<div id="app"></div>
+
+<footer>
+  <span>Source: <code>ClawDoc CRM database</code></span>
+  <span>ntelio · applied AI venture studio</span>
+</footer>
+</div>
+
+<script>
+const STAGE_ORDER = ["qualification","discovery","proposal","negotiation","verbal_commit","closed_won","closed_lost"];
+const STAGE_LABEL = {
+  qualification:"Qualification",
+  discovery:"Discovery",
+  proposal:"Proposal",
+  negotiation:"Negotiation",
+  verbal_commit:"Verbal Commit",
+  closed_won:"Closed · Won",
+  closed_lost:"Closed · Lost",
+};
+
+const fmtMoney = (n, ccy="USD") => new Intl.NumberFormat("en-US",{
+  style:"currency", currency:ccy, maximumFractionDigits:0,
+}).format(n||0);
+const fmtInt = n => new Intl.NumberFormat("en-US").format(n||0);
+const pct = n => Math.round((n||0)*100)+"%";
+const escape = s => (s??"").toString().replace(/[&<>"']/g, c=>({ "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;" }[c]));
+
+async function load(){
+  const app = document.getElementById("app");
+  const meta = document.getElementById("meta");
+  let data;
+  try {
+    const res = await fetch("/api/crm/funnel.json", {cache:"no-store"});
+    if(!res.ok) throw new Error(`HTTP ${res.status}`);
+    data = await res.json();
+  } catch(e){
+    app.innerHTML = `
+      <div class="error-box">
+        <strong>Couldn't load CRM data.</strong><br>
+        ${escape(e.message)}<br><br>
+        Check that the CRM database path in Settings points to a valid
+        SQLite file, or re-initialize it from the CRM settings panel.
+      </div>`;
+    meta.textContent = "";
+    return;
+  }
+  render(data);
+}
+
+function render(data){
+  const meta = document.getElementById("meta");
+  const app  = document.getElementById("app");
+  const ccy  = (data.currencies_present && data.currencies_present[0]) || "USD";
+  const mixed = (data.currencies_present||[]).length > 1;
+
+  meta.innerHTML = `
+    generated <code>${escape((data.generated_at||"").replace("T"," ").replace("+00:00"," UTC"))}</code><br>
+    currency <code>${escape(ccy)}${mixed?" (mixed)":""}</code>
+  `;
+
+  const s = data.summary || {};
+  const summary = `
+    <div class="summary">
+      ${tile("open","Open",         s.open)}
+      ${tile("won", "Won",          s.won)}
+      ${tile("lost","Lost",         s.lost)}
+      ${tile("all", "All deals",    s.all)}
+    </div>
+    <h2 class="section-title">
+      Funnel by stage <span class="rule"></span>
+      <span class="hint">width = total value · hover a slice for detail</span>
+    </h2>
+    ${funnel(data.stages||[])}
+    <h2 class="section-title">Deals <span class="rule"></span></h2>
+    ${dealsByStage(data.stages||[])}
+  `;
+  app.innerHTML = summary;
+
+  function tile(cls,label,obj){
+    obj = obj || {count:0,total_value:0,weighted_value:0};
+    return `
+      <div class="tile ${cls}">
+        <div class="label">${label}</div>
+        <div class="count">${fmtInt(obj.count)}</div>
+        <div class="money">${fmtMoney(obj.total_value, ccy)}</div>
+        <div class="weighted">weighted ${fmtMoney(obj.weighted_value, ccy)}</div>
+      </div>
+    `;
+  }
+
+  function funnel(stages){
+    const ordered = STAGE_ORDER
+      .map(k => stages.find(x => x.stage === k))
+      .filter(s => s && s.count > 0);
+    if(!ordered.length) return `<div class="funnel"><em>No deals yet.</em></div>`;
+
+    const maxVal = Math.max(1, ...ordered.map(s => s.total_value || 0));
+
+    // viewBox geometry
+    const W = 960;
+    const rowH = 78;
+    const sep = 3;
+    const fx0 = 200, fx1 = 700;
+    const fw  = fx1 - fx0;
+    const cx  = (fx0 + fx1) / 2;
+    const minRatio = 0.05;          // minimum slice width so $0 stages stay visible
+    const widthOf = v => Math.max(fw * minRatio, (v / maxVal) * fw);
+
+    const H = rowH * ordered.length + 20;
+
+    const slices = ordered.map((s, i) => {
+      const y0 = 10 + i * rowH;
+      const y1 = y0 + rowH - sep;
+      const topW = i === 0 ? fw : widthOf(ordered[i-1].total_value);
+      const botW = widthOf(s.total_value);
+      const points = [
+        [cx - topW/2, y0],
+        [cx + topW/2, y0],
+        [cx + botW/2, y1],
+        [cx - botW/2, y1],
+      ].map(p => p.join(",")).join(" ");
+      const cls  = s.stage === "closed_won" ? "won" : s.stage === "closed_lost" ? "lost" : "";
+      const midY = (y0 + y1) / 2;
+      const wide = botW > 110;
+      const label = STAGE_LABEL[s.stage] || s.stage;
+
+      return `
+        <polygon class="slice ${cls}" points="${points}">
+          <title>${escape(label)} — ${fmtInt(s.count)} deal${s.count===1?"":"s"} · ${fmtMoney(s.total_value, ccy)} (weighted ${fmtMoney(s.weighted_value, ccy)})</title>
+        </polygon>
+        <text class="stage-name" x="${fx0-16}" y="${midY-2}"  text-anchor="end">${escape(label)}</text>
+        <text class="stage-sub"  x="${fx0-16}" y="${midY+14}" text-anchor="end">${fmtInt(s.count)} deal${s.count===1?"":"s"}</text>
+        ${wide ? `<text class="value-in" x="${cx}" y="${midY+5}" text-anchor="middle">${fmtMoney(s.total_value, ccy)}</text>` : ""}
+        <text class="value-out" x="${fx1+16}" y="${midY-2}"  text-anchor="start">${fmtMoney(s.total_value, ccy)}</text>
+        <text class="weighted"  x="${fx1+16}" y="${midY+14}" text-anchor="start">weighted ${fmtMoney(s.weighted_value, ccy)}</text>
+      `;
+    }).join("");
+
+    return `
+      <div class="funnel">
+        <svg class="funnel-svg" viewBox="0 0 ${W} ${H}" preserveAspectRatio="xMidYMid meet"
+             role="img" aria-label="Sales funnel by stage">
+          ${slices}
+        </svg>
+      </div>
+    `;
+  }
+
+  function dealsByStage(stages){
+    const ordered = STAGE_ORDER
+      .map(k => stages.find(x => x.stage === k))
+      .filter(Boolean);
+    return ordered.map(s => {
+      if(!s.count) return "";
+      const rows = (s.deals||[])
+        .slice()
+        .sort((a,b)=>(b.value||0)-(a.value||0))
+        .map(d => `
+          <tr>
+            <td>
+              <div class="title">${escape(d.title||"")}</div>
+              <div class="org">${escape(d.organization_name||"—")}</div>
+              ${d.primary_contact_name?`<div class="contact">${escape(d.primary_contact_name)}</div>`:""}
+            </td>
+            <td class="num">${fmtMoney(d.value, d.currency||ccy)}</td>
+            <td class="num prob">${pct(d.probability)}</td>
+            <td class="num">${fmtMoney((d.value||0)*(d.probability||0), d.currency||ccy)}</td>
+            <td class="num">${escape(d.expected_close_date||"—")}</td>
+            <td>${escape(d.owner||"—")}</td>
+            <td>${escape(d.next_step||"")}</td>
+          </tr>
+        `).join("");
+      return `
+        <details class="stage-group" ${s.stage==="closed_lost"?"":"open"}>
+          <summary>
+            <span class="stage-name">${STAGE_LABEL[s.stage] || s.stage}</span>
+            <span class="count-pill">${fmtInt(s.count)} · ${fmtMoney(s.total_value,ccy)}</span>
+          </summary>
+          <table class="deals">
+            <thead>
+              <tr>
+                <th>Deal</th>
+                <th style="text-align:right">Value</th>
+                <th style="text-align:right">Prob</th>
+                <th style="text-align:right">Weighted</th>
+                <th style="text-align:right">Close</th>
+                <th>Owner</th>
+                <th>Next step</th>
+              </tr>
+            </thead>
+            <tbody>${rows}</tbody>
+          </table>
+        </details>
+      `;
+    }).join("");
+  }
+}
+
+// expand all <details> for printing so nothing is hidden in the PDF, restore after
+window.addEventListener("beforeprint", () => {
+  document.querySelectorAll("details").forEach(d => {
+    d.dataset.wasOpen = d.open ? "1" : "0";
+    d.open = true;
+  });
+});
+window.addEventListener("afterprint", () => {
+  document.querySelectorAll("details").forEach(d => {
+    d.open = d.dataset.wasOpen === "1";
+    delete d.dataset.wasOpen;
+  });
+});
+
+load();
+</script>
+</body>
+</html>
