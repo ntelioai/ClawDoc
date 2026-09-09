@@ -54,6 +54,21 @@
       return { a: empty(), b: empty() };
     })(),
     mcLastFocusedPane: localStorage.getItem('clawdoc.mcLastFocusedPane') === 'b' ? 'b' : 'a',
+    // Favorited folders/docs. Rendered as a pinned section between the CRM
+    // root and the workspace list so users can jump straight to hot spots
+    // without hunting through a deep tree. Persisted per-browser; server-side
+    // sync isn't necessary for the shortcut UX. Each entry: { path, kind }
+    // where kind is 'folder' or 'doc'.
+    favorites: (() => {
+      try {
+        const raw = localStorage.getItem('clawdoc.favorites');
+        if (!raw) return [];
+        const arr = JSON.parse(raw);
+        if (!Array.isArray(arr)) return [];
+        return arr.filter(x => x && typeof x.path === 'string' && (x.kind === 'folder' || x.kind === 'doc'));
+      } catch { return []; }
+    })(),
+    favExpanded: localStorage.getItem('clawdoc.favExpanded') !== '0',
   };
 
   // ---------- tabs + persisted ui state ----------
@@ -208,6 +223,8 @@
       }
     }
     state.docsByPath = new Map(state.docs.map(d => [d.path, d]));
+    // Keep favorites pointing at the same underlying item across renames/moves.
+    rewriteFavoritePath(oldPath, newPath);
     // buildTree needs the folder list too so intermediate empty folders survive.
     const folders = (state.index && Array.isArray(state.index.folders))
       ? state.index.folders.map(f => {
@@ -581,6 +598,10 @@
   // inner glyph identifies the module. Future special folders should follow
   // the same pattern with a domain-specific glyph inside the tile.
   const ICON_CRM_TILE = '<svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor" xmlns="http://www.w3.org/2000/svg"><rect x="1.25" y="1.25" width="13.5" height="13.5" rx="2.75" ry="2.75" fill="none" stroke="currentColor" stroke-width="1.4"/><rect x="3.9" y="9.5" width="1.6" height="3"/><rect x="7.2" y="6.8" width="1.6" height="5.7"/><rect x="10.5" y="4.3" width="1.6" height="8.2"/></svg>';
+  // Checkbox-with-tick glyph for the Todo child under the CRM root.
+  const ICON_TODO = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="3"/><polyline points="8 12 11 15 16 9"/></svg>';
+  // Timeline / bullet-list glyph for the Activity child under the CRM root.
+  const ICON_ACTIVITY = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="5.5" cy="6.5" r="1.5"/><circle cx="5.5" cy="12" r="1.5"/><circle cx="5.5" cy="17.5" r="1.5"/><line x1="10" y1="6.5" x2="20" y2="6.5"/><line x1="10" y1="12" x2="20" y2="12"/><line x1="10" y1="17.5" x2="20" y2="17.5"/></svg>';
   const ICON_CHEVRON = '<svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><polyline points="6 9 12 15 18 9"/></svg>';
   const ICON_REFRESH = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></svg>';
   const ICON_CHECK = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>';
@@ -763,6 +784,11 @@
       const crmNode = renderCrmRoot();
       if (crmNode) root.appendChild(crmNode);
     }
+    // Favorites section sits between CRM and the workspace list. Hidden
+    // entirely when there are no live favorites, so it never claims real
+    // estate for users who don't use it.
+    const favNode = renderFavoritesRoot();
+    if (favNode) root.appendChild(favNode);
     const filter = state.treeFilter.trim().toLowerCase();
     const matches = filter ? computeTreeMatches(filter) : null;
     // Render top-level workspaces in the order set in Settings; unknown
@@ -813,10 +839,138 @@
       const children = el('div', { class: 'tchildren' });
       children.appendChild(renderCrmChild('dashboard', 'Dashboard', ICON_SHEET));
       children.appendChild(renderCrmChild('report', 'Report', ICON_TEXT));
+      children.appendChild(renderCrmChild('todo', 'Todo', ICON_TODO));
+      children.appendChild(renderCrmChild('activity', 'Activity', ICON_ACTIVITY));
       tnode.appendChild(children);
     }
     return tnode;
   }
+  // Favorites: a pinned virtual root that lists user-starred folders and docs
+  // for quick access. Sits between the CRM root and the workspace list. Backed
+  // by state.favorites (persisted in localStorage); rows reuse the same click
+  // handlers as their real counterparts so double-navigation stays consistent.
+  const FAV_ROOT_KEY = '__favorites__';
+  const ICON_STAR = '<svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor" xmlns="http://www.w3.org/2000/svg"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/></svg>';
+  const ICON_STAR_OUTLINE = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/></svg>';
+
+  function saveFavorites() {
+    try { localStorage.setItem('clawdoc.favorites', JSON.stringify(state.favorites)); } catch {}
+  }
+  function isFavorited(path) {
+    return state.favorites.some(f => f.path === path);
+  }
+  function addFavorite(path, kind) {
+    if (!path || (kind !== 'folder' && kind !== 'doc')) return;
+    if (isFavorited(path)) return;
+    state.favorites.push({ path, kind });
+    saveFavorites();
+    renderTree();
+  }
+  function removeFavorite(path) {
+    const before = state.favorites.length;
+    state.favorites = state.favorites.filter(f => f.path !== path);
+    if (state.favorites.length !== before) {
+      saveFavorites();
+      renderTree();
+    }
+  }
+  // Rewrite favorite paths when a folder/doc is renamed or moved so the
+  // shortcut still points to the same underlying item. Called from the same
+  // spot that patches state.docs (applyOptimisticMove).
+  function rewriteFavoritePath(oldPath, newPath) {
+    if (oldPath === newPath) return false;
+    const oldPrefix = oldPath + '/';
+    let changed = false;
+    for (const f of state.favorites) {
+      if (f.path === oldPath) { f.path = newPath; changed = true; }
+      else if (f.path.startsWith(oldPrefix)) { f.path = newPath + f.path.slice(oldPath.length); changed = true; }
+    }
+    if (changed) saveFavorites();
+    return changed;
+  }
+
+  function renderFavoritesRoot() {
+    // Filter out any entries whose target no longer exists in the current
+    // index — silent cleanup so deleted items don't linger as broken links.
+    const live = state.favorites.filter(f => (
+      f.kind === 'folder'
+        ? (state.nodesByPath && state.nodesByPath.has(f.path))
+        : (state.docsByPath && state.docsByPath.has(f.path))
+    ));
+    if (live.length === 0) return null;
+
+    const isExpanded = state.favExpanded;
+    const tnode = el('div', { class: 'tnode' + (isExpanded ? '' : ' collapsed') });
+    const chev = el('span', { class: 'tchev', html: ICON_CHEVRON });
+    const icon = el('span', { class: 'ticon', html: ICON_STAR });
+    const name = el('span', { class: 'tname' }, 'Favorites');
+    const row = el('div', {
+      class: 'trow fav-root',
+      draggable: 'false',
+    }, [chev, icon, name]);
+    row.addEventListener('click', () => {
+      state.favExpanded = !state.favExpanded;
+      try { localStorage.setItem('clawdoc.favExpanded', state.favExpanded ? '1' : '0'); } catch {}
+      renderTree();
+    });
+    tnode.appendChild(row);
+
+    if (isExpanded) {
+      const children = el('div', { class: 'tchildren' });
+      // Favorites share the tree filter + expansion state with the workspace
+      // list — folders opened here also stay open there and vice-versa. That's
+      // desirable: the favorite is a shortcut TO the folder, not a separate
+      // copy of it.
+      const filter = state.treeFilter.trim().toLowerCase();
+      const matches = filter ? computeTreeMatches(filter) : null;
+      for (const fav of live) {
+        const child = fav.kind === 'folder'
+          ? renderFavoriteFolder(fav.path, matches, filter)
+          : renderFavoriteDoc(fav.path);
+        if (child) children.appendChild(child);
+      }
+      tnode.appendChild(children);
+    }
+    return tnode;
+  }
+
+  function renderFavoriteFolder(path, matches, filter) {
+    const node = state.nodesByPath.get(path);
+    if (!node) return null;
+    // Reuse the workspace tree's renderer so favorite folders behave exactly
+    // like their originals: chevron-expandable, subfolders + docs inline,
+    // drag/drop, right-click, keyboard, filter highlighting — all free.
+    const rendered = renderNode(node, 0, matches, filter);
+    if (rendered) {
+      const row = rendered.querySelector(':scope > .trow');
+      if (row) row.classList.add('fav-child');
+    }
+    return rendered;
+  }
+
+  function renderFavoriteDoc(path) {
+    const doc = state.docsByPath.get(path);
+    if (!doc) return null;
+    const isActive = state.currentDoc && state.currentDoc.path === path;
+    const tnode = el('div', { class: 'tnode leaf' });
+    const chev = el('span', { class: 'tchev', html: ICON_CHEVRON });
+    const icon = el('span', { class: 'ticon', html: docIcon(doc) });
+    const displayText = state.treeShowFilenames ? doc.name : (doc.title || doc.name);
+    const name = el('span', { class: 'tname' }, displayText);
+    const row = el('div', {
+      class: 'trow doc-row fav-child ' + docKindClass(doc) + (isActive ? ' active' : ''),
+      title: docTooltip(doc),
+      draggable: 'false',
+    }, [chev, icon, name]);
+    row.addEventListener('click', () => selectDoc(path));
+    row.addEventListener('contextmenu', (ev) => {
+      ev.preventDefault();
+      showDocContextMenu(doc, ev.clientX, ev.clientY);
+    });
+    tnode.appendChild(row);
+    return tnode;
+  }
+
   function renderCrmChild(kind, label, iconHtml) {
     const isActive = state.currentCrm === kind;
     const tnode = el('div', { class: 'tnode leaf' });
@@ -836,7 +990,7 @@
   // No tab/persistence entanglement: reloading the page returns to the last
   // real doc; CRM views are always one click away in the sidebar.
   function openCrmView(kind) {
-    if (kind !== 'dashboard' && kind !== 'report') return;
+    if (kind !== 'dashboard' && kind !== 'report' && kind !== 'todo' && kind !== 'activity') return;
     if (!confirmDiscardEdits()) return;
     state.currentDoc = null;
     state.currentCrm = kind;
@@ -862,7 +1016,7 @@
       class: 'html-frame crm-frame',
       src: '/crm/' + kind,
       // No sandbox: the CRM views are first-party (bundled with the app) and
-      // need to call /api/crm/funnel.json on the same origin.
+      // need to call /api/crm/* on the same origin.
     });
     wrap.appendChild(iframe);
     host.appendChild(wrap);
@@ -1418,9 +1572,10 @@
         fetch('/api/open?path=' + encodeURIComponent(state.currentDoc.path)).catch(()=>{});
       });
       actions.appendChild(reveal);
-      const copy = el('button', { class: 'crumb-secondary', title: 'Copy workspace-relative path' }, 'Copy path');
+      const copy = el('button', { class: 'crumb-secondary', title: 'Copy absolute filesystem path' }, 'Copy path');
       copy.addEventListener('click', () => {
-        navigator.clipboard.writeText(state.currentDoc.path);
+        const p = absolutePathOf(state.currentDoc.path) || state.currentDoc.path;
+        navigator.clipboard.writeText(p);
         copy.textContent = 'Copied';
         setTimeout(() => copy.textContent = 'Copy path', 1200);
       });
@@ -3128,8 +3283,8 @@
 
     section.appendChild(el('div', { class: 'settings-help' },
       'When enabled, a "CRM" folder appears above your workspaces in the ' +
-      'sidebar with Dashboard and Report views backed by a local SQLite ' +
-      'database. Deal data never leaves your machine.'));
+      'sidebar with Dashboard, Report, Todo, and Activity views backed by ' +
+      'a local SQLite database. Deal data never leaves your machine.'));
 
     const list = el('div', { class: 'settings-list' });
     const mkRow = (label, control) => {
@@ -4199,23 +4354,37 @@
     return { workspace: p.slice(0, i), rel: p.slice(i + 1) };
   }
 
-  // Path the terminal can reference. Returns null if no doc/folder is selected
-  // or the current selection's workspace doesn't match the live PTY session.
+  // Turn a workspace-prefixed path ("Business/Products/foo.md") into the actual
+  // filesystem path ("/Users/…/Google Drive/Business/Products/foo.md") using
+  // the roots that came back from /api/index. Returns the input unchanged if
+  // the workspace root isn't known yet (index not loaded) — better to hand
+  // back the prefixed form than to give the user an empty clipboard.
+  function absolutePathOf(prefixedPath) {
+    if (!prefixedPath) return '';
+    const { workspace, rel } = splitWorkspacePath(prefixedPath);
+    const roots = (state.index && state.index.roots) || [];
+    const r = roots.find(x => x.name === workspace);
+    if (!r || !r.path) return prefixedPath;
+    return rel ? r.path.replace(/\/+$/, '') + '/' + rel : r.path;
+  }
+
+  // Absolute filesystem path of the current selection, or '' if nothing is
+  // selected / the workspace root isn't known yet. The terminal accepts absolute
+  // paths for @-references, so cross-workspace insert works without needing the
+  // PTY to be rooted in the same tree.
   function currentInsertablePath() {
     const full = state.currentDoc ? state.currentDoc.path
                : state.currentFolder ? state.currentFolder
                : '';
-    if (!full) return null;
-    const { workspace, rel } = splitWorkspacePath(full);
-    if (!chat.sessionWorkspace || workspace !== chat.sessionWorkspace) return null;
-    return rel || '.';
+    if (!full) return '';
+    return absolutePathOf(full) || '';
   }
 
   function insertCurrentPathIntoTerminal() {
-    const rel = currentInsertablePath();
-    if (!rel) return;
+    const abs = currentInsertablePath();
+    if (!abs) return;
     if (!chat.ws || chat.ws.readyState !== 1) return;
-    chat.ws.send(JSON.stringify({ t: 'in', d: '@' + rel + ' ' }));
+    chat.ws.send(JSON.stringify({ t: 'in', d: '@' + abs + ' ' }));
     chat.xterm && chat.xterm.focus();
   }
 
@@ -4257,30 +4426,23 @@
       }
       return;
     }
-    const { workspace, rel } = splitWorkspacePath(full);
     const isFolder = !state.currentDoc;
-    const showRel = (rel || '.') + (isFolder ? '/' : '');
-    const matches = chat.sessionWorkspace && workspace === chat.sessionWorkspace;
-    if (matches) {
-      ctx.textContent = '@' + showRel;
-      ctx.setAttribute('data-insertable', '1');
-      ctx.title = 'Click to insert “@' + showRel + '” into the prompt';
-      if (insertBtn) {
-        insertBtn.disabled = false;
-        insertBtn.title = 'Insert “@' + showRel + '” at the cursor';
-      }
-    } else {
-      ctx.textContent = full + (isFolder ? '/' : '');
-      ctx.removeAttribute('data-insertable');
-      ctx.title = chat.sessionWorkspace
-        ? `In workspace "${workspace}", but the terminal is rooted in "${chat.sessionWorkspace}". Restart to switch.`
-        : full;
-      if (insertBtn) {
-        insertBtn.disabled = true;
-        insertBtn.title = chat.sessionWorkspace
-          ? `Selection is in "${workspace}" but the terminal is rooted in "${chat.sessionWorkspace}". Restart Claude to switch workspace.`
-          : 'Open a Claude session first';
-      }
+    const abs = absolutePathOf(full);
+    const showLabel = full + (isFolder ? '/' : '');
+    const insertLabel = (abs || full) + (isFolder ? '/' : '');
+    // Insert absolute paths so cross-workspace references work regardless of
+    // where the PTY is rooted. The header label stays short (workspace-prefixed
+    // form) so the crumb doesn't blow up; the tooltip shows what actually gets
+    // pasted so there's no surprise.
+    ctx.textContent = '@' + showLabel;
+    ctx.setAttribute('data-insertable', '1');
+    ctx.title = 'Click to insert “@' + insertLabel + '” into the prompt';
+    if (insertBtn) {
+      const sessionReady = chat.ws && chat.ws.readyState === 1;
+      insertBtn.disabled = !sessionReady;
+      insertBtn.title = sessionReady
+        ? 'Insert “@' + insertLabel + '” at the cursor'
+        : 'Open a Claude session first';
     }
   }
 
@@ -4551,7 +4713,12 @@
       toolCards: {},
       queued: '',
       working: null,
-      allowedTools: [],
+      // Pre-approve read-only web tools so questions that require lookup
+      // ("analyze <company>", "what's the latest on <topic>") work first-turn
+      // instead of getting silently denied by `claude -p`, which has no live
+      // permission prompt. The user can still deny by removing them from the
+      // session (Settings → Claude panel) if that ever ships.
+      allowedTools: ['WebSearch', 'WebFetch'],
       lastUserText: '',
       started: !!opts.started,               // has sent/loaded anything
       needsLoad: !!opts.needsLoad,           // restored tab whose transcript isn't fetched yet
@@ -4852,7 +5019,7 @@
       agEndTurn(s);
       if (ev.session_id) { s.sessionId = ev.session_id; agPersist(); }
       const denials = ev.permission_denials || [];
-      if (denials.length) agDenialNotice(s, denials);
+      if (denials.length) agDenialNotice(s, denials, !!ev.is_error);
       if (ev.is_error) agSystem(s, 'Turn ended with an error' + (ev.subtype ? ' (' + ev.subtype + ')' : ''), true);
       return;
     }
@@ -4890,28 +5057,61 @@
   }
 
   // One clear, actionable card when Claude was blocked from using a tool.
-  function agDenialNotice(s, denials) {
+  // `turnFailed` = the turn itself ended with is_error. When false (the common
+  // case), Claude usually worked around the denied tool, so an automatic
+  // resend would duplicate work already done — offer plain "Allow" and hide
+  // the retry button by default.
+  function agDenialNotice(s, denials, turnFailed) {
     const tools = [...new Set(denials.map(d => d.tool_name).filter(Boolean))];
     if (!tools.length) tools.push('a tool');
     const list = tools.join(', ');
     const many = tools.length > 1;
     const box = el('div', { class: 'perm-prompt' });
     box.appendChild(el('div', { class: 'perm-title' }, '✋ Claude needs permission to use ' + list));
-    box.appendChild(el('div', { class: 'perm-detail' },
-      'This panel can’t show a live approval prompt, so ' + (many ? 'these tools were' : 'this tool was') +
-      ' blocked. Allow ' + (many ? 'them' : 'it') + ' for this session and Claude will retry automatically.'));
-    const allowBtn = el('button', { class: 'perm-allow' }, 'Allow ' + list + ' & retry');
-    allowBtn.addEventListener('click', () => {
+    box.appendChild(el('div', { class: 'perm-detail' }, turnFailed
+      ? ('The turn failed because ' + (many ? 'these tools were' : 'this tool was') + ' blocked. Allow and retry to finish.')
+      : ('This panel can’t show a live approval prompt, so ' + (many ? 'these tools were' : 'this tool was') +
+         ' blocked mid-turn. Claude may have worked around it — allow ' + (many ? 'them' : 'it') +
+         ' for this session so the next turn goes through, or retry now if the task isn’t done.')));
+
+    const grantAllow = () => {
       tools.forEach(t => { if (/^[A-Za-z][A-Za-z0-9_]*$/.test(t) && !s.allowedTools.includes(t)) s.allowedTools.push(t); });
-      box.classList.add('answered');
-      box.appendChild(el('div', { class: 'perm-detail' }, '→ allowed: ' + list + '. Retrying…'));
+    };
+    const doRetry = () => {
       if (s.ws) { try { s.ws.close(); } catch {} }
       s.ws = null;
       if (s.lastUserText) agSendText(s, s.lastUserText);
+    };
+
+    // Primary "Allow" — grants the tool for this session; does NOT resend the
+    // last prompt (that was the bug causing duplicate work when a turn had
+    // already completed despite the denial).
+    const allowBtn = el('button', { class: 'perm-allow' }, 'Allow ' + list);
+    allowBtn.addEventListener('click', () => {
+      grantAllow();
+      box.classList.add('answered');
+      box.appendChild(el('div', { class: 'perm-detail' },
+        '→ allowed for this session. Send another message or click Retry if the task isn’t finished.'));
     });
+
+    // Retry — only meaningful when Claude actually needed the tool to finish.
+    // Auto-primary when the turn failed; secondary otherwise.
+    const retryBtn = el('button', { class: turnFailed ? 'perm-allow' : 'perm-retry' },
+      turnFailed ? 'Allow & retry' : 'Allow & retry anyway');
+    retryBtn.addEventListener('click', () => {
+      grantAllow();
+      box.classList.add('answered');
+      box.appendChild(el('div', { class: 'perm-detail' }, '→ allowed: ' + list + '. Retrying…'));
+      doRetry();
+    });
+
     const dismiss = el('button', { class: 'perm-deny' }, 'Not now');
     dismiss.addEventListener('click', () => box.classList.add('answered'));
-    box.appendChild(el('div', { class: 'perm-actions' }, [allowBtn, dismiss]));
+
+    // Order: when the turn failed, put retry first (it's what the user needs).
+    // When it succeeded, put plain Allow first so it's the safer default.
+    const actions = turnFailed ? [retryBtn, allowBtn, dismiss] : [allowBtn, retryBtn, dismiss];
+    box.appendChild(el('div', { class: 'perm-actions' }, actions));
     agAppend(s, box);
   }
 
@@ -5418,18 +5618,14 @@
     const full = state.currentDoc ? state.currentDoc.path
                : state.currentFolder ? state.currentFolder : '';
     if (!full) return null;
-    const { workspace, rel } = splitWorkspacePath(full);
     const isFolder = !state.currentDoc;
     const slash = isFolder ? '/' : '';
-    const sw = (AS() && AS().sessionWorkspace) || '';
-    if (sw && workspace === sw) {
-      const r = rel || '.';
-      return { insert: r, display: r + slash };
-    }
-    const abs = rootAbsPath(workspace);
+    // Absolute path is what actually gets inserted so cross-workspace refs
+    // work regardless of the session's cwd. Display keeps the short prefixed
+    // form so the context strip doesn't overflow; tooltip shows the full path.
+    const abs = absolutePathOf(full);
     if (!abs) return null;
-    const p = rel ? abs + '/' + rel : abs;
-    return { insert: p, display: p + slash };
+    return { insert: abs, display: full + slash, absDisplay: abs + slash };
   }
   function updateAgentContext() {
     const ctx = $('#agent-context');
@@ -5445,8 +5641,8 @@
     }
     ctx.textContent = '@' + info.display;
     ctx.setAttribute('data-insertable', '1');
-    ctx.title = 'Click to add “@' + info.display + '” to your message';
-    if (insertBtn) { insertBtn.disabled = false; insertBtn.title = 'Add “@' + info.display + '” to your message'; }
+    ctx.title = 'Click to add “@' + (info.absDisplay || info.display) + '” to your message';
+    if (insertBtn) { insertBtn.disabled = false; insertBtn.title = 'Add “@' + (info.absDisplay || info.display) + '” to your message'; }
   }
   function agentInsertPath() {
     const info = agentInsertInfo();
@@ -5563,7 +5759,7 @@
     s.activeAssistant = null;
     s.activeText = '';
     s.queued = '';
-    s.allowedTools = [];
+    s.allowedTools = ['WebSearch', 'WebFetch'];
     s.working = null;
     s.title = 'New chat';
     agSetEmpty(s);
@@ -7232,8 +7428,16 @@
     items.push(
       '-',
       { label: 'Reveal in Finder', onClick: () => { fetch('/api/open?path=' + encodeURIComponent(doc.path)).catch(() => {}); } },
-      { label: 'Copy path', onClick: () => navigator.clipboard.writeText(doc.path) },
+      { label: 'Copy path', onClick: () => navigator.clipboard.writeText(absolutePathOf(doc.path) || doc.path) },
     );
+    if (!multi) {
+      items.push(
+        '-',
+        isFavorited(doc.path)
+          ? { label: 'Remove from Favorites', onClick: () => removeFavorite(doc.path) }
+          : { label: 'Add to Favorites', onClick: () => addFavorite(doc.path, 'doc') },
+      );
+    }
     if (!isRoot) {
       items.push('-');
       if (!multi) items.push({ label: 'Rename…', onClick: () => renameNode(doc.path, doc.name, false) });
@@ -7269,6 +7473,7 @@
       { label: 'Expand subtree', onClick: () => paneId ? mcExpandSubtree(paneId, node.path) : expandSubtree(node.path) },
       { label: 'Collapse subtree', onClick: () => paneId ? mcCollapseSubtree(paneId, node.path) : collapseSubtree(node.path) },
       { label: 'Reveal in Finder', onClick: () => { fetch('/api/open?path=' + encodeURIComponent(node.path)).catch(() => {}); } },
+      { label: 'Copy path', onClick: () => navigator.clipboard.writeText(absolutePathOf(node.path) || node.path) },
     ];
     // Copy folder — but never the workspace root pseudo-folder.
     if (!isWorkspaceRoot) {
@@ -7277,6 +7482,14 @@
         { label: 'Copy folder', onClick: () => copyToClipboard(node.path, 'folder', node.name) },
       );
     }
+    // Star toggle — allowed on any folder (including workspace roots) so users
+    // can pin a whole workspace as a shortcut too.
+    items.push(
+      '-',
+      isFavorited(node.path)
+        ? { label: 'Remove from Favorites', onClick: () => removeFavorite(node.path) }
+        : { label: 'Add to Favorites', onClick: () => addFavorite(node.path, 'folder') },
+    );
     // Paste here — only show when there's something on the clipboard.
     if (state.clipboard) {
       items.push({

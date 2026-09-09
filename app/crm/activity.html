@@ -1,0 +1,707 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Activity — ntelio CRM</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Kanit:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+:root{
+  --bg:#f3f3ef; --bg-alt:#ebeae4; --bg-deep:#e6e4dc;
+  --ink:#0c1f28; --ink-soft:#2b3f48; --muted:#6e7a82;
+  --teal:#3e7b97; --teal-deep:#2a5a72;
+  --teal-glow:rgba(62,123,151,.10); --teal-glow-soft:rgba(62,123,151,.05);
+  --hairline:#d4d2cb; --hairline-strong:#b9b7af;
+  --danger:#b34a4a; --warn:#c68a3a; --ok:#2e7d55;
+  --display:"Kanit",system-ui,sans-serif;
+  --mono:"JetBrains Mono",ui-monospace,SFMono-Regular,Menlo,monospace;
+  --max:1320px; --gutter:clamp(1.25rem,4vw,3rem);
+}
+*{box-sizing:border-box}
+html,body{margin:0;padding:0}
+body{
+  background:var(--bg);color:var(--ink);
+  font-family:var(--display);font-weight:400;line-height:1.45;
+  -webkit-font-smoothing:antialiased;
+  background-image:
+    radial-gradient(1200px 600px at 85% -10%, var(--teal-glow), transparent 60%),
+    radial-gradient(900px 500px at -10% 110%, var(--teal-glow-soft), transparent 60%);
+  min-height:100vh;
+}
+.wrap{max-width:var(--max);margin:0 auto;padding:clamp(1.5rem,4vw,3rem) var(--gutter)}
+
+header{
+  display:flex;align-items:flex-end;justify-content:space-between;
+  gap:2rem;padding-bottom:1.5rem;border-bottom:1px solid var(--hairline);
+  margin-bottom:2rem;flex-wrap:wrap;
+}
+.brand{display:flex;flex-direction:column;gap:.35rem}
+.brand .eyebrow{
+  font-size:.72rem;letter-spacing:.22em;text-transform:uppercase;
+  color:var(--teal);font-weight:500;
+}
+.brand h1{
+  margin:0;font-family:var(--display);font-weight:500;
+  font-size:clamp(1.85rem,3.4vw,2.75rem);letter-spacing:-.015em;
+  color:var(--ink);line-height:1.05;
+}
+.brand h1 em{font-style:normal;color:var(--teal)}
+.meta{text-align:right;color:var(--muted);font-family:var(--mono);font-size:.78rem;line-height:1.65}
+
+.btn-primary{
+  font-family:var(--display);font-weight:500;font-size:.82rem;letter-spacing:.02em;
+  padding:.5rem 1rem;border:1px solid var(--teal);background:var(--teal);color:#fff;
+  border-radius:2px;cursor:pointer;display:inline-flex;align-items:center;gap:.4rem;
+  transition:background .15s ease,border-color .15s ease,transform .05s ease;
+}
+.btn-primary:hover{background:var(--teal-deep);border-color:var(--teal-deep)}
+.btn-primary:active{transform:translateY(1px)}
+.btn-primary:disabled{opacity:.6;cursor:default;transform:none}
+.btn-secondary{
+  font-family:var(--display);font-weight:500;font-size:.82rem;padding:.5rem 1rem;
+  border:1px solid var(--hairline-strong);background:var(--bg);color:var(--ink-soft);
+  border-radius:2px;cursor:pointer;
+}
+.btn-secondary:hover{background:var(--bg-alt);border-color:var(--ink-soft);color:var(--ink)}
+
+.filterbar{display:flex;flex-wrap:wrap;align-items:center;gap:.5rem;margin-bottom:1.25rem}
+.chip{
+  font-family:var(--display);font-size:.78rem;font-weight:500;
+  padding:.4rem .75rem;border:1px solid var(--hairline-strong);
+  background:var(--bg);color:var(--ink-soft);border-radius:2px;cursor:pointer;user-select:none;
+  transition:background .15s ease,color .15s ease,border-color .15s ease;
+  display:inline-flex;align-items:center;gap:.35rem;
+}
+.chip:hover{background:var(--bg-alt)}
+.chip.active{background:var(--teal);color:#fff;border-color:var(--teal)}
+.chip .n{font-family:var(--mono);font-size:.7rem;color:var(--muted);margin-left:.35rem}
+.chip.active .n{color:rgba(255,255,255,.75)}
+.filterbar .spacer{flex:1}
+.filterbar .search{
+  height:32px;padding:0 .7rem;border:1px solid var(--hairline-strong);background:var(--bg);
+  color:var(--ink);font:inherit;font-size:.82rem;border-radius:2px;min-width:220px;outline:none;
+}
+.filterbar .search:focus{border-color:var(--teal)}
+
+/* Timeline */
+.timeline{
+  position:relative;padding-left:1.35rem;
+}
+.timeline::before{
+  content:"";position:absolute;left:.6rem;top:.25rem;bottom:.25rem;width:1px;
+  background:var(--hairline);
+}
+.activity{
+  position:relative;padding:.9rem 0 .9rem 1rem;
+  border-bottom:1px dashed var(--hairline);
+  cursor:pointer;
+  transition:background .12s ease;
+}
+.activity:last-child{border-bottom:none}
+.activity:hover{background:var(--bg-alt)}
+.activity .dot{
+  position:absolute;left:-.85rem;top:1.15rem;
+  width:12px;height:12px;border-radius:50%;
+  background:var(--bg);border:2px solid var(--teal);
+}
+.activity.type-call     .dot{border-color:#2e7d55}
+.activity.type-meeting  .dot{border-color:#c68a3a}
+.activity.type-email    .dot{border-color:var(--teal)}
+.activity.type-demo     .dot{border-color:#7c3aed}
+.activity.type-linkedin .dot{border-color:#0a66c2}
+.activity.type-whatsapp .dot{border-color:#25d366}
+.activity.type-note     .dot{border-color:var(--muted)}
+.activity.type-task     .dot{border-color:var(--muted)}
+.activity.type-follow_up .dot{border-color:var(--warn)}
+.activity.type-other    .dot{border-color:var(--muted)}
+
+.act-head{display:flex;flex-wrap:wrap;align-items:baseline;gap:.6rem}
+.act-type{
+  font-family:var(--mono);font-size:.68rem;font-weight:500;
+  letter-spacing:.14em;text-transform:uppercase;color:var(--teal-deep);
+  padding:.12rem .5rem;background:var(--bg-alt);border-radius:2px;
+}
+.act-subject{font-weight:500;font-size:.98rem;color:var(--ink);flex:1;min-width:0;
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
+}
+.act-when{font-family:var(--mono);font-size:.72rem;color:var(--muted);white-space:nowrap}
+.act-body{
+  font-size:.85rem;color:var(--ink-soft);margin-top:.35rem;
+  white-space:pre-wrap;word-break:break-word;
+  display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;overflow:hidden;
+}
+.act-meta{
+  display:flex;flex-wrap:wrap;align-items:center;gap:.4rem .85rem;
+  margin-top:.45rem;font-family:var(--mono);font-size:.72rem;color:var(--muted);
+}
+.act-meta .link{color:var(--teal);font-weight:500;text-decoration:none;cursor:pointer}
+.act-meta .link:hover{text-decoration:underline}
+.act-meta .sep{color:var(--hairline-strong)}
+.act-dir{
+  padding:.1rem .4rem;border-radius:2px;font-size:.65rem;letter-spacing:.1em;text-transform:uppercase;
+  background:var(--bg-alt);color:var(--muted);
+}
+.act-dir.inbound  {background:rgba(62,123,151,.14);color:var(--teal-deep)}
+.act-dir.outbound {background:rgba(46,125,85,.14);color:var(--ok)}
+.act-dir.internal {background:rgba(198,138,58,.14);color:var(--warn)}
+
+.attachments{
+  display:flex;flex-wrap:wrap;gap:.4rem;margin-top:.5rem;
+}
+.att{
+  display:inline-flex;align-items:center;gap:.35rem;
+  padding:.28rem .55rem;background:var(--bg-alt);
+  border:1px solid var(--hairline);border-radius:2px;
+  font-family:var(--mono);font-size:.72rem;color:var(--ink-soft);cursor:pointer;
+  transition:background .12s ease,border-color .12s ease,color .12s ease;
+  max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
+}
+.att:hover{background:var(--bg);border-color:var(--teal);color:var(--teal-deep)}
+.att svg{width:11px;height:11px;stroke:currentColor;fill:none;stroke-width:2;flex-shrink:0}
+
+.act-actions{
+  position:absolute;top:.65rem;right:.25rem;
+  display:flex;gap:.2rem;opacity:0;transition:opacity .12s ease;
+}
+.activity:hover .act-actions{opacity:1}
+.iconbtn{
+  width:26px;height:26px;border:1px solid transparent;background:transparent;color:var(--muted);
+  border-radius:3px;cursor:pointer;display:inline-flex;align-items:center;justify-content:center;
+  transition:background .12s ease,color .12s ease,border-color .12s ease;
+}
+.iconbtn:hover{background:var(--bg);color:var(--ink);border-color:var(--hairline-strong)}
+.iconbtn.danger:hover{color:var(--danger);border-color:var(--danger)}
+.iconbtn svg{width:13px;height:13px;fill:none;stroke:currentColor;stroke-width:2;stroke-linecap:round;stroke-linejoin:round}
+
+.empty,.err{padding:2.5rem 1.5rem;text-align:center;color:var(--muted);font-size:.9rem}
+.err{color:var(--danger)}
+
+.toast-host{position:fixed;bottom:24px;left:50%;transform:translateX(-50%);
+  display:flex;flex-direction:column;align-items:center;gap:8px;z-index:100;pointer-events:none}
+.toast{padding:.55rem 1rem;border-radius:2px;background:var(--ink);color:var(--bg);
+  font-size:.82rem;box-shadow:0 6px 22px rgba(0,0,0,.25);pointer-events:auto;
+  opacity:0;transform:translateY(6px);transition:opacity .15s ease,transform .15s ease;
+  display:inline-flex;align-items:center;gap:.7rem}
+.toast.in{opacity:1;transform:translateY(0)}
+.toast.error{background:var(--danger)}
+
+/* Dialog */
+dialog.act-dialog{
+  border:1px solid var(--hairline-strong);border-radius:4px;padding:0;
+  background:var(--bg);color:var(--ink);width:min(600px, calc(100vw - 2rem));
+  box-shadow:0 20px 60px rgba(12,31,40,.28);font-family:var(--display);
+}
+dialog.act-dialog::backdrop{background:rgba(12,31,40,.35);backdrop-filter:blur(2px)}
+.dlg-head{display:flex;align-items:baseline;justify-content:space-between;
+  padding:1rem 1.25rem;border-bottom:1px solid var(--hairline)}
+.dlg-head h2{margin:0;font-weight:500;font-size:1.1rem}
+.dlg-head .kind{font-family:var(--mono);font-size:.7rem;color:var(--muted);letter-spacing:.15em;text-transform:uppercase}
+.dlg-body{padding:1.1rem 1.25rem;display:flex;flex-direction:column;gap:.85rem;max-height:70vh;overflow-y:auto}
+.field{display:flex;flex-direction:column;gap:.3rem}
+.field label{font-size:.7rem;letter-spacing:.14em;text-transform:uppercase;color:var(--muted);font-weight:500}
+.field input, .field select, .field textarea{
+  font:inherit;font-size:.9rem;font-family:var(--display);padding:.5rem .65rem;
+  border:1px solid var(--hairline-strong);background:var(--bg);color:var(--ink);
+  border-radius:2px;outline:none;
+}
+.field input:focus, .field select:focus, .field textarea:focus{border-color:var(--teal)}
+.field textarea{resize:vertical;min-height:80px;line-height:1.4}
+.field-row{display:grid;grid-template-columns:1fr 1fr;gap:.85rem}
+.att-row{display:flex;gap:.4rem}
+.att-row input{flex:1}
+.att-row button{padding:0 .7rem;border:1px solid var(--hairline-strong);background:var(--bg);cursor:pointer;font:inherit;font-size:.82rem;border-radius:2px;color:var(--ink-soft)}
+.att-row button:hover{background:var(--bg-alt);color:var(--ink);border-color:var(--ink-soft)}
+.att-list{display:flex;flex-wrap:wrap;gap:.4rem;margin-top:.3rem}
+.att-tag{display:inline-flex;align-items:center;gap:.35rem;padding:.28rem .55rem;
+  background:var(--bg-alt);border:1px solid var(--hairline);border-radius:2px;
+  font-family:var(--mono);font-size:.72rem;color:var(--ink-soft)}
+.att-tag button{
+  background:transparent;border:none;color:var(--muted);cursor:pointer;padding:0;
+  font-size:14px;line-height:1;
+}
+.att-tag button:hover{color:var(--danger)}
+.hint{font-family:var(--mono);font-size:.68rem;color:var(--muted);margin-top:.15rem}
+.dlg-foot{display:flex;align-items:center;justify-content:flex-end;gap:.6rem;
+  padding:.9rem 1.25rem;border-top:1px solid var(--hairline);background:var(--bg-alt)}
+.dlg-foot .msg{flex:1;font-family:var(--mono);font-size:.72rem;color:var(--muted)}
+.dlg-foot .msg.error{color:var(--danger)}
+
+footer{
+  margin-top:3rem;padding-top:1.25rem;border-top:1px solid var(--hairline);
+  color:var(--muted);font-family:var(--mono);font-size:.72rem;
+  display:flex;flex-wrap:wrap;gap:.75rem 1.25rem;
+}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <div class="brand">
+      <span class="eyebrow">CRM</span>
+      <h1>Activity <em>feed</em></h1>
+    </div>
+    <div style="display:flex;flex-direction:column;align-items:flex-end;gap:.85rem">
+      <button class="btn-primary" id="btn-new" type="button">＋ Log activity</button>
+      <div class="meta" id="meta">Loading…</div>
+    </div>
+  </header>
+
+  <div id="app"><div class="empty">Loading activities…</div></div>
+
+  <dialog class="act-dialog" id="act-dialog">
+    <form method="dialog" id="act-form">
+      <div class="dlg-head">
+        <h2 id="dlg-title">Log activity</h2>
+        <span class="kind" id="dlg-kind"></span>
+      </div>
+      <div class="dlg-body">
+        <div class="field-row">
+          <div class="field">
+            <label for="f-type">Type</label>
+            <select id="f-type" name="activity_type">
+              <option value="call">Call</option>
+              <option value="meeting">Meeting</option>
+              <option value="email">Email</option>
+              <option value="demo">Demo</option>
+              <option value="linkedin">LinkedIn</option>
+              <option value="whatsapp">WhatsApp</option>
+              <option value="note" selected>Note</option>
+              <option value="follow_up">Follow-up</option>
+              <option value="task">Task</option>
+              <option value="other">Other</option>
+            </select>
+          </div>
+          <div class="field">
+            <label for="f-when">When</label>
+            <input id="f-when" name="activity_date" type="datetime-local">
+          </div>
+        </div>
+        <div class="field">
+          <label for="f-subject">Subject</label>
+          <input id="f-subject" name="subject" type="text" required maxlength="200" autocomplete="off" spellcheck="false">
+        </div>
+        <div class="field">
+          <label for="f-body">Notes</label>
+          <textarea id="f-body" name="body" rows="4" spellcheck="false"></textarea>
+        </div>
+        <div class="field-row">
+          <div class="field">
+            <label for="f-direction">Direction</label>
+            <select id="f-direction" name="direction">
+              <option value="">(unspecified)</option>
+              <option value="inbound">Inbound</option>
+              <option value="outbound">Outbound</option>
+              <option value="internal">Internal</option>
+            </select>
+          </div>
+          <div class="field">
+            <label for="f-outcome">Outcome</label>
+            <input id="f-outcome" name="outcome" type="text" autocomplete="off" maxlength="200" placeholder="(optional)">
+          </div>
+        </div>
+        <div class="field">
+          <label for="f-deal">Linked deal</label>
+          <select id="f-deal" name="deal_id"><option value="">(none)</option></select>
+        </div>
+        <div class="field-row">
+          <div class="field">
+            <label for="f-org">Organization</label>
+            <select id="f-org" name="organization_id"><option value="">(none)</option></select>
+          </div>
+          <div class="field">
+            <label for="f-contact">Contact</label>
+            <select id="f-contact" name="contact_id"><option value="">(none)</option></select>
+          </div>
+        </div>
+        <div class="field">
+          <label>Related files</label>
+          <div class="att-row">
+            <input id="f-att-input" type="text" placeholder="Workspace path, e.g. Business/Commercial/Sebleen/proposal.md" autocomplete="off" spellcheck="false">
+            <button type="button" id="f-att-add">Add</button>
+          </div>
+          <div class="hint">Enter a ClawDoc workspace-prefixed path. Clicking the pill on the feed opens the file in ClawDoc.</div>
+          <div class="att-list" id="f-att-list"></div>
+        </div>
+      </div>
+      <div class="dlg-foot">
+        <span class="msg" id="dlg-msg"></span>
+        <button type="button" class="btn-secondary" id="btn-cancel">Cancel</button>
+        <button type="submit" class="btn-primary" id="btn-save">Save</button>
+      </div>
+    </form>
+  </dialog>
+
+  <footer id="footer" hidden>
+    <span>Source: <code>ClawDoc CRM database</code></span>
+    <span id="stamp"></span>
+  </footer>
+</div>
+<div class="toast-host" id="toast-host"></div>
+
+<script>
+const fmtInt = n => new Intl.NumberFormat("en-US").format(n||0);
+const escape = s => (s??"").toString().replace(/[&<>"']/g,c=>({ "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;" }[c]));
+
+const TYPE_LABELS = {
+  call:'Call', meeting:'Meeting', email:'Email', demo:'Demo',
+  linkedin:'LinkedIn', whatsapp:'WhatsApp', note:'Note',
+  follow_up:'Follow-up', task:'Task', other:'Other',
+};
+
+const state = {
+  activities: [],
+  filter: 'all',        // activity_type or 'all'
+  query: '',
+  lookups: null,
+  editingId: null,
+  attachments: [],      // dialog-scoped
+};
+
+function toast(msg, opts) {
+  const host = document.getElementById('toast-host');
+  const el = document.createElement('div');
+  el.className = 'toast' + ((opts && opts.error) ? ' error' : '');
+  el.textContent = msg;
+  host.appendChild(el);
+  requestAnimationFrame(() => el.classList.add('in'));
+  const duration = (opts && opts.duration) || 3000;
+  setTimeout(() => { el.classList.remove('in'); setTimeout(() => el.remove(), 200); }, duration);
+}
+
+// --- feed helpers ---
+function relTime(iso) {
+  if (!iso) return '';
+  const t = new Date(iso.replace(' ', 'T') + (iso.includes('T') || iso.endsWith('Z') ? '' : 'Z'));
+  const s = (Date.now() - t.getTime()) / 1000;
+  if (isNaN(s)) return iso;
+  if (s < 60) return Math.floor(s) + 's ago';
+  if (s < 3600) return Math.floor(s / 60) + 'm ago';
+  if (s < 86400) return Math.floor(s / 3600) + 'h ago';
+  if (s < 604800) return Math.floor(s / 86400) + 'd ago';
+  return t.toISOString().slice(0, 10);
+}
+function fullTime(iso) {
+  if (!iso) return '';
+  const t = new Date(iso.replace(' ', 'T') + (iso.includes('T') || iso.endsWith('Z') ? '' : 'Z'));
+  return isNaN(t) ? iso : t.toLocaleString();
+}
+
+function typeCounts(activities) {
+  const c = { all: activities.length };
+  for (const t of Object.keys(TYPE_LABELS)) c[t] = 0;
+  for (const a of activities) if (a.activity_type in c) c[a.activity_type]++;
+  return c;
+}
+
+function matchesFilter(a, filter) {
+  if (filter === 'all') return true;
+  return a.activity_type === filter;
+}
+function matchesQuery(a, q) {
+  if (!q) return true;
+  const n = q.toLowerCase();
+  return (a.subject || '').toLowerCase().includes(n)
+      || (a.body || '').toLowerCase().includes(n)
+      || (a.deal_title || '').toLowerCase().includes(n)
+      || (a.organization_name || '').toLowerCase().includes(n)
+      || (a.contact_name || '').toLowerCase().includes(n)
+      || (a.outcome || '').toLowerCase().includes(n);
+}
+
+async function load() {
+  try {
+    const r = await fetch('/api/crm/activities.json?limit=500', { cache: 'no-store' });
+    if (!r.ok) throw new Error('HTTP ' + r.status);
+    const data = await r.json();
+    state.activities = data.activities || [];
+    document.getElementById('meta').innerHTML =
+      escape(new Date(data.generated_at).toLocaleString()) + '<br>' +
+      fmtInt(state.activities.length) + ' recent';
+    document.getElementById('stamp').textContent = 'Generated ' + escape(data.generated_at);
+    document.getElementById('footer').hidden = false;
+    render();
+  } catch (e) {
+    document.getElementById('app').innerHTML =
+      '<div class="err">Couldn’t load activities: ' + escape(e.message) + '</div>';
+    document.getElementById('meta').textContent = '';
+  }
+}
+
+function render() {
+  const app = document.getElementById('app');
+  const c = typeCounts(state.activities);
+  const filtered = state.activities.filter(a => matchesFilter(a, state.filter) && matchesQuery(a, state.query));
+
+  const chipDefs = [
+    ['all', 'All'],
+    ['call', 'Calls'],
+    ['meeting', 'Meetings'],
+    ['email', 'Emails'],
+    ['note', 'Notes'],
+    ['demo', 'Demos'],
+    ['follow_up', 'Follow-ups'],
+    ['whatsapp', 'WhatsApp'],
+    ['linkedin', 'LinkedIn'],
+    ['other', 'Other'],
+  ];
+  const chips = chipDefs
+    .filter(([id]) => id === 'all' || c[id])
+    .map(([id, label]) =>
+      `<button class="chip${state.filter === id ? ' active' : ''}" data-filter="${id}">${escape(label)}<span class="n">${fmtInt(c[id]||0)}</span></button>`
+    ).join('');
+
+  const filterbar =
+    `<div class="filterbar">
+      ${chips}
+      <span class="spacer"></span>
+      <input class="search" id="search" type="search" placeholder="Filter…" value="${escape(state.query)}" autocomplete="off" spellcheck="false">
+    </div>`;
+
+  const list = filtered.length
+    ? `<div class="timeline">${filtered.map(activityRow).join('')}</div>`
+    : `<div class="empty">${state.query || state.filter !== 'all' ? 'Nothing matches that filter.' : 'No activity logged yet.'}</div>`;
+
+  app.innerHTML = filterbar + list;
+
+  app.querySelectorAll('.chip').forEach(el => {
+    el.addEventListener('click', () => { state.filter = el.getAttribute('data-filter'); render(); });
+  });
+  const search = document.getElementById('search');
+  if (search) search.addEventListener('input', (e) => {
+    state.query = e.target.value;
+    const caret = e.target.selectionStart;
+    render();
+    const s2 = document.getElementById('search');
+    if (s2) { s2.focus(); try { s2.setSelectionRange(caret, caret); } catch {} }
+  });
+  app.querySelectorAll('.activity').forEach(row => {
+    const id = Number(row.getAttribute('data-id'));
+    row.addEventListener('click', (e) => {
+      // Ignore clicks on attachment pills and action buttons.
+      if (e.target.closest('.att, .iconbtn')) return;
+      const a = state.activities.find(x => x.id === id);
+      if (a) openDialog(a);
+    });
+    row.querySelectorAll('.att').forEach(att => {
+      att.addEventListener('click', () => openAttachment(att.getAttribute('data-path')));
+    });
+    const del = row.querySelector('[data-act="delete"]');
+    if (del) del.addEventListener('click', (e) => { e.stopPropagation(); deleteActivity(id); });
+  });
+}
+
+function activityRow(a) {
+  const links = [];
+  if (a.deal_title) links.push(`<span class="link" data-kind="deal">${escape(a.deal_title)}</span>`);
+  if (a.organization_name) links.push(`<span>${escape(a.organization_name)}</span>`);
+  if (a.contact_name) links.push(`<span>${escape(a.contact_name)}</span>`);
+  const dirPill = a.direction ? `<span class="act-dir ${escape(a.direction)}">${escape(a.direction)}</span>` : '';
+  const outcome = a.outcome ? `<span>${escape(a.outcome)}</span>` : '';
+  const metaBits = [dirPill, ...links, outcome].filter(Boolean);
+  const meta = metaBits.length ? `<div class="act-meta">${metaBits.join('<span class="sep">·</span>')}</div>` : '';
+  const body = a.body ? `<div class="act-body">${escape(a.body)}</div>` : '';
+  const attHtml = (a.attachments && a.attachments.length)
+    ? `<div class="attachments">${a.attachments.map(fp =>
+        `<span class="att" data-path="${escape(fp)}" title="${escape(fp)}">
+          <svg viewBox="0 0 24 24"><path d="M13 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9z"/><polyline points="13 2 13 9 20 9"/></svg>
+          ${escape(fp.split('/').pop() || fp)}
+        </span>`).join('')}</div>`
+    : '';
+  return `
+    <div class="activity type-${escape(a.activity_type)}" data-id="${a.id}">
+      <span class="dot"></span>
+      <div class="act-head">
+        <span class="act-type">${escape(TYPE_LABELS[a.activity_type] || a.activity_type)}</span>
+        <span class="act-subject">${escape(a.subject || '(no subject)')}</span>
+        <span class="act-when" title="${escape(fullTime(a.activity_date))}">${escape(relTime(a.activity_date))}</span>
+      </div>
+      ${body}
+      ${attHtml}
+      ${meta}
+      <div class="act-actions">
+        <button class="iconbtn danger" data-act="delete" title="Delete">
+          <svg viewBox="0 0 24 24"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><path d="M10 11v6M14 11v6"/><path d="M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"/></svg>
+        </button>
+      </div>
+    </div>`;
+}
+
+// --- open a workspace-prefixed file in the parent ClawDoc window ---
+function openAttachment(prefixedPath) {
+  if (!prefixedPath) return;
+  try {
+    // ClawDoc's own hash router responds to #doc=<workspace-prefixed-path>.
+    window.parent.location.hash = '#doc=' + encodeURIComponent(prefixedPath);
+  } catch (e) {
+    // If parent access is blocked for some reason, fall through to a new tab.
+    window.open('/#doc=' + encodeURIComponent(prefixedPath), '_blank');
+  }
+}
+
+// --- dialog ---
+async function ensureLookups() {
+  if (state.lookups) return state.lookups;
+  const r = await fetch('/api/crm/lookups', { cache: 'no-store' });
+  if (!r.ok) throw new Error('HTTP ' + r.status);
+  state.lookups = await r.json();
+  return state.lookups;
+}
+function populatePicker(sel, items, valueKey, labelFn) {
+  while (sel.options.length > 1) sel.remove(1);
+  for (const it of items) {
+    const opt = document.createElement('option');
+    opt.value = String(it[valueKey]);
+    opt.textContent = labelFn(it);
+    sel.appendChild(opt);
+  }
+}
+
+function renderAttList() {
+  const host = document.getElementById('f-att-list');
+  host.innerHTML = state.attachments.map((fp, i) =>
+    `<span class="att-tag" title="${escape(fp)}">${escape(fp)}<button type="button" data-i="${i}">×</button></span>`
+  ).join('');
+  host.querySelectorAll('button').forEach(b => {
+    b.addEventListener('click', () => {
+      state.attachments.splice(Number(b.getAttribute('data-i')), 1);
+      renderAttList();
+    });
+  });
+}
+
+async function openDialog(activity) {
+  const dlg = document.getElementById('act-dialog');
+  const msg = document.getElementById('dlg-msg');
+  msg.textContent = 'Loading…';
+  msg.className = 'msg';
+  try { await ensureLookups(); } catch (e) {
+    msg.textContent = 'Could not load pickers: ' + e.message;
+    msg.className = 'msg error';
+  }
+  const L = state.lookups || { organizations: [], contacts: [], deals: [] };
+  populatePicker(document.getElementById('f-org'),     L.organizations, 'id', o => o.name);
+  populatePicker(document.getElementById('f-contact'), L.contacts,      'id',
+    c => c.full_name + (c.organization_name ? '  ·  ' + c.organization_name : ''));
+  populatePicker(document.getElementById('f-deal'),    L.deals,         'id',
+    d => (d.status !== 'open' ? '[' + d.status + '] ' : '') +
+         d.title + (d.organization_name ? '  ·  ' + d.organization_name : ''));
+
+  const isEdit = !!activity;
+  state.editingId = isEdit ? activity.id : null;
+  document.getElementById('dlg-title').textContent = isEdit ? 'Edit activity' : 'Log activity';
+  document.getElementById('dlg-kind').textContent = isEdit ? '#' + activity.id : 'new';
+
+  document.getElementById('f-type').value      = activity ? activity.activity_type : 'note';
+  document.getElementById('f-subject').value   = activity && activity.subject ? activity.subject : '';
+  document.getElementById('f-body').value      = activity && activity.body ? activity.body : '';
+  document.getElementById('f-direction').value = activity && activity.direction ? activity.direction : '';
+  document.getElementById('f-outcome').value   = activity && activity.outcome ? activity.outcome : '';
+  document.getElementById('f-deal').value      = activity && activity.deal_id ? String(activity.deal_id) : '';
+  document.getElementById('f-org').value       = activity && activity.organization_id ? String(activity.organization_id) : '';
+  document.getElementById('f-contact').value   = activity && activity.contact_id ? String(activity.contact_id) : '';
+
+  // Default the datetime to now (local) for new entries; keep existing for edits.
+  const when = document.getElementById('f-when');
+  if (activity && activity.activity_date) {
+    // sqlite: "YYYY-MM-DD HH:MM:SS" — trim seconds for datetime-local.
+    when.value = String(activity.activity_date).replace(' ', 'T').slice(0, 16);
+  } else {
+    const now = new Date(Date.now() - new Date().getTimezoneOffset() * 60000);
+    when.value = now.toISOString().slice(0, 16);
+  }
+
+  state.attachments = (activity && activity.attachments) ? activity.attachments.slice() : [];
+  renderAttList();
+  document.getElementById('f-att-input').value = '';
+
+  if (!msg.textContent.includes('Could not')) msg.textContent = '';
+  dlg.showModal();
+  setTimeout(() => document.getElementById('f-subject').focus(), 0);
+}
+function closeDialog() {
+  const dlg = document.getElementById('act-dialog');
+  if (dlg.open) dlg.close();
+}
+async function saveDialog() {
+  const msg = document.getElementById('dlg-msg');
+  const saveBtn = document.getElementById('btn-save');
+  // Convert datetime-local ("YYYY-MM-DDTHH:MM") to sqlite format
+  // ("YYYY-MM-DD HH:MM:SS") for consistency with existing rows.
+  const whenLocal = document.getElementById('f-when').value;
+  const activity_date = whenLocal ? whenLocal.replace('T', ' ') + ':00' : null;
+  const payload = {
+    activity_type:   document.getElementById('f-type').value,
+    subject:         document.getElementById('f-subject').value,
+    body:            document.getElementById('f-body').value,
+    activity_date,
+    direction:       document.getElementById('f-direction').value || null,
+    outcome:         document.getElementById('f-outcome').value,
+    deal_id:         document.getElementById('f-deal').value,
+    organization_id: document.getElementById('f-org').value,
+    contact_id:      document.getElementById('f-contact').value,
+    attachments:     state.attachments.slice(),
+  };
+  if (!payload.subject.trim()) {
+    msg.textContent = 'Subject is required.'; msg.className = 'msg error'; return;
+  }
+  saveBtn.disabled = true;
+  msg.textContent = 'Saving…';
+  msg.className = 'msg';
+  try {
+    const isEdit = state.editingId != null;
+    const url = isEdit ? '/api/crm/activities/' + state.editingId : '/api/crm/activities';
+    const r = await fetch(url, {
+      method: isEdit ? 'PATCH' : 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+    const data = await r.json().catch(() => ({}));
+    if (!r.ok) throw new Error(data.error || ('HTTP ' + r.status));
+    closeDialog();
+    toast(isEdit ? 'Saved' : 'Logged');
+    await load();
+  } catch (e) {
+    msg.textContent = 'Save failed: ' + e.message;
+    msg.className = 'msg error';
+    saveBtn.disabled = false;
+  }
+}
+
+async function deleteActivity(id) {
+  const a = state.activities.find(x => x.id === id);
+  if (!a) return;
+  if (!confirm('Delete this activity?\n\n' + (a.subject || '(no subject)'))) return;
+  try {
+    const r = await fetch('/api/crm/activities/' + id, { method: 'DELETE' });
+    if (!r.ok) throw new Error('HTTP ' + r.status);
+    state.activities = state.activities.filter(x => x.id !== id);
+    render();
+    toast('Deleted');
+  } catch (e) {
+    toast('Delete failed: ' + e.message, { error: true });
+  }
+}
+
+// Header + dialog wiring
+document.getElementById('btn-new').addEventListener('click', () => openDialog(null));
+document.getElementById('btn-cancel').addEventListener('click', (e) => { e.preventDefault(); closeDialog(); });
+document.getElementById('act-form').addEventListener('submit', (e) => { e.preventDefault(); saveDialog(); });
+document.getElementById('f-att-add').addEventListener('click', () => {
+  const input = document.getElementById('f-att-input');
+  const v = input.value.trim();
+  if (!v) return;
+  if (!state.attachments.includes(v)) state.attachments.push(v);
+  input.value = '';
+  renderAttList();
+  input.focus();
+});
+document.getElementById('f-att-input').addEventListener('keydown', (e) => {
+  if (e.key === 'Enter') { e.preventDefault(); document.getElementById('f-att-add').click(); }
+});
+
+load();
+</script>
+</body>
+</html>

@@ -583,6 +583,20 @@ body.fileop-busy [data-pane-tree] { cursor: progress; }
 .trow.crm-root .ticon { color: var(--accent); }
 .trow.crm-child.active { background: var(--accent-soft); color: var(--accent-strong); }
 
+/* Favorites virtual root: same section-header treatment as CRM so both pinned
+   sections read as app-level menus above the workspace list. The star icon
+   gets a warm accent so it stands apart from CRM's cool accent color. */
+.trow.fav-root .tname {
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  font-size: 11.5px;
+  font-weight: 600;
+  color: var(--text-muted);
+}
+.trow.fav-root:hover .tname { color: var(--text); }
+.trow.fav-root .ticon { color: #d4a017; }
+.trow.fav-child.active { background: var(--accent-soft); color: var(--accent-strong); }
+
 /* Bundled CRM dashboard/report render as full-bleed iframes; suppress the
    sandbox chrome that .html-frame-wrap adds for user-authored HTML docs. */
 .crm-frame-wrap { padding: 0; margin: 0; height: 100%; }
@@ -2282,6 +2296,8 @@ a.agent-file-link:hover { border-bottom-style: solid; }
   font-size: 12px; cursor: pointer;
 }
 .perm-actions .perm-allow { background: var(--tp-accent); color: var(--tp-on-accent); border-color: var(--tp-accent); }
+.perm-actions .perm-retry { color: var(--tp-accent); border-color: var(--tp-accent); background: transparent; }
+.perm-actions .perm-retry:hover { background: var(--tp-accent-soft, rgba(37,99,235,0.10)); }
 .perm-actions .perm-deny:hover { border-color: var(--tp-err); color: var(--tp-err); }
 .perm-prompt.answered { opacity: 0.6; }
 .perm-prompt.answered .perm-actions { display: none; }

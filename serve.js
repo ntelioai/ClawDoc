@@ -456,6 +456,12 @@ const server = http.createServer((req, res) => {
   if (req.method === 'GET' && (pathname === '/crm/report' || pathname === '/crm/report.html')) {
     return sendFile(res, path.join(APP_DIR, 'crm', 'report.html'));
   }
+  if (req.method === 'GET' && (pathname === '/crm/todo' || pathname === '/crm/todo.html')) {
+    return sendFile(res, path.join(APP_DIR, 'crm', 'todo.html'));
+  }
+  if (req.method === 'GET' && (pathname === '/crm/activity' || pathname === '/crm/activity.html')) {
+    return sendFile(res, path.join(APP_DIR, 'crm', 'activity.html'));
+  }
 
   if (req.method === 'GET' && pathname === '/api/crm/funnel.json') {
     const cfg = getCrmSettings();
@@ -467,6 +473,122 @@ const server = http.createServer((req, res) => {
     } catch (err) {
       const code = err && err.code === 'ENOENT' ? 404 : 500;
       return sendJson(res, code, { error: err && err.message || String(err) });
+    }
+  }
+
+  if (req.method === 'GET' && pathname === '/api/crm/tasks.json') {
+    const cfg = getCrmSettings();
+    if (!cfg.enabled) return sendJson(res, 404, { error: 'CRM is disabled — enable it in Settings' });
+    try {
+      const abs = crm.resolveDbPath(cfg.dbPath);
+      return sendJson(res, 200, crm.getOpenTasks(abs));
+    } catch (err) {
+      const code = err && err.code === 'ENOENT' ? 404 : 500;
+      return sendJson(res, code, { error: err && err.message || String(err) });
+    }
+  }
+  if (req.method === 'POST' && pathname === '/api/crm/tasks') {
+    const cfg = getCrmSettings();
+    if (!cfg.enabled) return sendJson(res, 404, { error: 'CRM is disabled — enable it in Settings' });
+    return readJsonBody(req, res, (body) => {
+      try {
+        const abs = crm.resolveDbPath(cfg.dbPath);
+        return sendJson(res, 201, crm.createTask(abs, body || {}));
+      } catch (err) {
+        return sendJson(res, 400, { error: err && err.message || String(err) });
+      }
+    });
+  }
+  if (req.method === 'GET' && pathname === '/api/crm/lookups') {
+    const cfg = getCrmSettings();
+    if (!cfg.enabled) return sendJson(res, 404, { error: 'CRM is disabled — enable it in Settings' });
+    try {
+      const abs = crm.resolveDbPath(cfg.dbPath);
+      return sendJson(res, 200, crm.getLookups(abs));
+    } catch (err) {
+      const code = err && err.code === 'ENOENT' ? 404 : 500;
+      return sendJson(res, code, { error: err && err.message || String(err) });
+    }
+  }
+  if (req.method === 'PATCH' && pathname.startsWith('/api/crm/tasks/')) {
+    const cfg = getCrmSettings();
+    if (!cfg.enabled) return sendJson(res, 404, { error: 'CRM is disabled — enable it in Settings' });
+    const id = pathname.slice('/api/crm/tasks/'.length);
+    if (!/^\d+$/.test(id)) return sendJson(res, 400, { error: 'bad task id' });
+    return readJsonBody(req, res, (body) => {
+      try {
+        const abs = crm.resolveDbPath(cfg.dbPath);
+        return sendJson(res, 200, crm.updateTask(abs, id, body || {}));
+      } catch (err) {
+        return sendJson(res, 400, { error: err && err.message || String(err) });
+      }
+    });
+  }
+  if (req.method === 'DELETE' && pathname.startsWith('/api/crm/tasks/')) {
+    const cfg = getCrmSettings();
+    if (!cfg.enabled) return sendJson(res, 404, { error: 'CRM is disabled — enable it in Settings' });
+    const id = pathname.slice('/api/crm/tasks/'.length);
+    if (!/^\d+$/.test(id)) return sendJson(res, 400, { error: 'bad task id' });
+    try {
+      const abs = crm.resolveDbPath(cfg.dbPath);
+      return sendJson(res, 200, crm.deleteTask(abs, id));
+    } catch (err) {
+      return sendJson(res, 500, { error: err && err.message || String(err) });
+    }
+  }
+
+  // Activities feed (calls, emails, meetings, notes, …)
+  if (req.method === 'GET' && pathname === '/api/crm/activities.json') {
+    const cfg = getCrmSettings();
+    if (!cfg.enabled) return sendJson(res, 404, { error: 'CRM is disabled — enable it in Settings' });
+    try {
+      const abs = crm.resolveDbPath(cfg.dbPath);
+      const opts = {
+        limit: query && query.limit,
+        type: query && query.type,
+      };
+      return sendJson(res, 200, crm.getActivities(abs, opts));
+    } catch (err) {
+      const code = err && err.code === 'ENOENT' ? 404 : 500;
+      return sendJson(res, code, { error: err && err.message || String(err) });
+    }
+  }
+  if (req.method === 'POST' && pathname === '/api/crm/activities') {
+    const cfg = getCrmSettings();
+    if (!cfg.enabled) return sendJson(res, 404, { error: 'CRM is disabled — enable it in Settings' });
+    return readJsonBody(req, res, (body) => {
+      try {
+        const abs = crm.resolveDbPath(cfg.dbPath);
+        return sendJson(res, 201, crm.createActivity(abs, body || {}));
+      } catch (err) {
+        return sendJson(res, 400, { error: err && err.message || String(err) });
+      }
+    });
+  }
+  if (req.method === 'PATCH' && pathname.startsWith('/api/crm/activities/')) {
+    const cfg = getCrmSettings();
+    if (!cfg.enabled) return sendJson(res, 404, { error: 'CRM is disabled — enable it in Settings' });
+    const id = pathname.slice('/api/crm/activities/'.length);
+    if (!/^\d+$/.test(id)) return sendJson(res, 400, { error: 'bad activity id' });
+    return readJsonBody(req, res, (body) => {
+      try {
+        const abs = crm.resolveDbPath(cfg.dbPath);
+        return sendJson(res, 200, crm.updateActivity(abs, id, body || {}));
+      } catch (err) {
+        return sendJson(res, 400, { error: err && err.message || String(err) });
+      }
+    });
+  }
+  if (req.method === 'DELETE' && pathname.startsWith('/api/crm/activities/')) {
+    const cfg = getCrmSettings();
+    if (!cfg.enabled) return sendJson(res, 404, { error: 'CRM is disabled — enable it in Settings' });
+    const id = pathname.slice('/api/crm/activities/'.length);
+    if (!/^\d+$/.test(id)) return sendJson(res, 400, { error: 'bad activity id' });
+    try {
+      const abs = crm.resolveDbPath(cfg.dbPath);
+      return sendJson(res, 200, crm.deleteActivity(abs, id));
+    } catch (err) {
+      return sendJson(res, 500, { error: err && err.message || String(err) });
     }
   }
 
