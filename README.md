@@ -86,6 +86,28 @@ The first time you launch ClawDoc, it shows a folder picker. Choose the folder y
 - **Insert button** — drops the focused file path into the Claude prompt.
 - **Alternative model providers** — **Settings → Model provider** overrides `ANTHROPIC_BASE_URL` / `ANTHROPIC_API_KEY` (presets for Google AI Studio, Ollama, OpenRouter, or custom) so the agent can target non-Anthropic or local endpoints. The key is stored in `settings.json` (mode `0600`) and never returned to the client.
 
+### Bundled skills
+
+Skills shipped in this repo under [`skills/`](skills/) — install them into `~/.claude/skills/`
+so both the embedded agent and your normal `claude` CLI pick them up:
+
+```bash
+npm run install-skills          # symlink every bundled skill
+node scripts/install-skills.js --list   # what's bundled, and how it's installed
+node scripts/install-skills.js crm      # just one
+node scripts/install-skills.js --copy   # copy instead of symlink (Windows w/o Developer Mode)
+```
+
+Symlink is the default on purpose: a later `git pull` updates the skill in place, with no
+reinstall step on any machine. An existing directory at the target is moved to
+`~/.claude/skills-backup/` rather than overwritten.
+
+- **`crm`** — drives the personal sales-pipeline sqlite (`~/crm.sqlite`) that also backs
+  ClawDoc's own `/crm/dashboard` and `/crm/report` views. The skill owns all writes; the
+  app reads the same DB. Per-machine paths and owner come from `~/.config/crm/config.json`
+  or `CRM_*` env vars (`crm.py doctor` prints what resolved) — nothing to edit in the
+  repo, and no pipeline data ever lives here.
+
 ### Git & history
 
 - **Built-in git** via [isomorphic-git](https://isomorphic-git.org/) — auto-commits document edits with `clawdoc: edit <files>` messages, with optional auto-push to GitHub.

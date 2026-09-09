@@ -41,7 +41,8 @@
   "scripts": {
     "start": "electron-forge start",
     "package": "electron-forge package",
-    "make": "electron-forge make"
+    "make": "electron-forge make",
+    "install-skills": "node scripts/install-skills.js"
   },
   "dependencies": {
     "@octokit/auth-oauth-device": "^8.0.3",

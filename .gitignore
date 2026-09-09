@@ -33,6 +33,10 @@ Thumbs.db
 .vscode/
 *.iml
 
+# Python bytecode (bundled skills under skills/ are stdlib python)
+__pycache__/
+*.pyc
+
 # Process artifacts
 *.pid
 *.seed
