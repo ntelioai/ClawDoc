@@ -22,6 +22,7 @@
     // { enabled, dbPath, resolvedDbPath, exists, defaultDbPath } once
     // /api/crm/settings resolves; null until then. Sidebar treats null as off.
     crmSettings: null,
+    geminiSettings: null,
     sortBy: localStorage.getItem('clawdoc.sortBy') || 'date',
     sortDir: localStorage.getItem('clawdoc.sortDir') || 'desc',
     treeFilter: '',
@@ -3269,6 +3270,13 @@
     } catch {}
   }
 
+  async function loadGeminiSettings() {
+    try {
+      const r = await fetch('/api/gemini');
+      if (r.ok) state.geminiSettings = await r.json();
+    } catch {}
+  }
+
   // CRM settings panel: enable toggle + editable DB path. On save the server
   // auto-creates the sqlite file + schema if it doesn't exist yet, so users
   // only have to flip one switch to get a working CRM.
@@ -3477,6 +3485,98 @@
     return section;
   }
 
+  // Gemini config for on-demand image asset generation ("nano banana" /
+  // gemini-image models). Separate from the "Model provider" section above,
+  // which points the embedded Claude Code agent itself at an alternative
+  // provider — this one is credentials for doc/asset-generation flows to
+  // call the Gemini API directly when an image asset is needed.
+  function renderGeminiSection() {
+    const section = el('div', { class: 'settings-section' });
+    section.appendChild(el('h3', null, 'Gemini (image assets)'));
+    const cur = state.geminiSettings;
+    if (!cur) {
+      section.appendChild(el('div', { class: 'settings-help' }, 'Loading…'));
+      return section;
+    }
+
+    section.appendChild(el('div', { class: 'settings-help' },
+      'Credentials for generating image assets on demand (nano banana / ' +
+      'Gemini image models) — used by doc-authoring flows, not the embedded ' +
+      'Claude Code agent. The API key is stored in settings.json (mode 0600).'));
+
+    const list = el('div', { class: 'settings-list' });
+    const mkRow = (label, control) => {
+      const row = el('div', { class: 'settings-row' });
+      row.appendChild(el('span', { class: 'sr-key' }, label));
+      row.appendChild(control);
+      return row;
+    };
+
+    const baseInput = el('input', {
+      type: 'text', class: 'settings-input',
+      placeholder: 'https://generativelanguage.googleapis.com/v1beta',
+      spellcheck: 'false', autocomplete: 'off', value: cur.baseUrl || '',
+    });
+    const keyInput = el('input', {
+      type: 'password', class: 'settings-input',
+      placeholder: cur.hasKey ? '•••••••• (saved — leave blank to keep)' : 'API key',
+      spellcheck: 'false', autocomplete: 'off',
+    });
+    const modelInput = el('input', {
+      type: 'text', class: 'settings-input', placeholder: 'gemini-2.5-flash',
+      spellcheck: 'false', autocomplete: 'off', value: cur.defaultModel || '',
+    });
+    const imageModelInput = el('input', {
+      type: 'text', class: 'settings-input', placeholder: 'gemini-3.1-flash-image-preview',
+      spellcheck: 'false', autocomplete: 'off', value: cur.imageModel || '',
+    });
+
+    list.appendChild(mkRow('Base URL', baseInput));
+    list.appendChild(mkRow('API key', keyInput));
+    list.appendChild(mkRow('Default model', modelInput));
+    list.appendChild(mkRow('Image model', imageModelInput));
+    section.appendChild(list);
+
+    const saveRow = el('div', { class: 'settings-row settings-save-row' });
+    const status = el('span', { class: 'settings-status' });
+    saveRow.appendChild(el('span', { class: 'sr-val' },
+      cur.hasKey ? 'Key on file — image generation available.' : 'No key saved yet.'));
+    saveRow.appendChild(status);
+    const saveBtn = el('button', { class: 'btn-primary' }, 'Save Gemini settings');
+    saveBtn.addEventListener('click', async () => {
+      saveBtn.disabled = true;
+      status.textContent = 'Saving…';
+      status.className = 'settings-status';
+      const keyVal = keyInput.value;
+      try {
+        const r = await fetch('/api/gemini', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            baseUrl: baseInput.value,
+            defaultModel: modelInput.value,
+            imageModel: imageModelInput.value,
+            apiKey: keyVal,
+            apiKeyProvided: keyVal !== '',
+          }),
+        });
+        const data = await r.json();
+        if (!r.ok || !data.ok) throw new Error(data.error || ('HTTP ' + r.status));
+        state.geminiSettings = data;
+        status.textContent = 'Saved ✓';
+        status.className = 'settings-status ok';
+        setTimeout(() => { if (!$('#settings-modal').classList.contains('hidden')) renderSettings(); }, 700);
+      } catch (err) {
+        status.textContent = 'Error: ' + err.message;
+        status.className = 'settings-status error';
+        saveBtn.disabled = false;
+      }
+    });
+    saveRow.appendChild(saveBtn);
+    section.appendChild(saveRow);
+    return section;
+  }
+
   // Which Claude client the single topbar "Claude" button opens. The rich
   // structured client is the default; the PTY terminal is opt-in. Stored in
   // localStorage (clawdoc.claudeClient) — see getClaudeClient/setClaudeClient.
@@ -3515,6 +3615,9 @@
       if (!$('#settings-modal').classList.contains('hidden')) renderSettings();
     });
     loadCrmSettings().then(() => {
+      if (!$('#settings-modal').classList.contains('hidden')) renderSettings();
+    });
+    loadGeminiSettings().then(() => {
       if (!$('#settings-modal').classList.contains('hidden')) renderSettings();
     });
   }
@@ -3746,6 +3849,9 @@
     // CRM (sales pipeline) — optional feature; when enabled, adds a virtual
     // "CRM" root above the workspaces with Dashboard + Report children.
     tab('crm', 'CRM').appendChild(renderCrmSection());
+
+    // Gemini — image asset generation ("nano banana") credentials.
+    tab('gemini', 'Gemini').appendChild(renderGeminiSection());
 
     // Stats
     const indexPanel = tab('index', 'Index');

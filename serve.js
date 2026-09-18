@@ -14,6 +14,7 @@ const chokidar = require('chokidar');
 const gitOps = require('./git');
 const github = require('./github');
 const crm = require('./crm');
+const geminiImage = require('./gemini-image');
 
 const SCRIPT_DIR = __dirname;
 const APP_DIR = path.join(SCRIPT_DIR, 'app');
@@ -34,6 +35,9 @@ function terminalEnv(extra) {
     ...process.env,
     PATH: PANDOC_BIN_DIR + sep + (process.env.PATH || ''),
     CLAWDOC_NODE: process.execPath,
+    // Lets scripts run inside a spawned terminal/agent (e.g. the nano-banana
+    // skill) find this instance's local API without guessing the port.
+    CLAWDOC_PORT: String(PORT),
     // Model-provider overrides (#43) layered on top of process.env so every
     // spawned `claude` (terminal + agent) talks to the configured endpoint.
     // Unset/Anthropic preset → empty object → no behavior change.
@@ -158,6 +162,41 @@ function setProviderSettings(cfg) {
     apiKey: cfg.apiKeyProvided ? String(cfg.apiKey || '').trim() : cur.apiKey,
   };
   s.provider = next;
+  writeSettings(s);
+  return next;
+}
+
+// Gemini config for on-demand image asset generation ("nano banana"):
+// { apiKey, baseUrl, defaultModel, imageModel }. Stored in settings.json
+// (mode 0600), separate from the coding-agent `provider` block above — this
+// one is for the doc/asset-generation flows, not the embedded Claude Code.
+function getGeminiSettings() {
+  const s = readSettings();
+  const g = s.gemini && typeof s.gemini === 'object' ? s.gemini : {};
+  return {
+    apiKey: typeof g.apiKey === 'string' ? g.apiKey : '',
+    baseUrl: typeof g.baseUrl === 'string' && g.baseUrl
+      ? g.baseUrl : 'https://generativelanguage.googleapis.com/v1beta',
+    defaultModel: typeof g.defaultModel === 'string' && g.defaultModel
+      ? g.defaultModel : 'gemini-2.5-flash',
+    imageModel: typeof g.imageModel === 'string' && g.imageModel
+      ? g.imageModel : 'gemini-3.1-flash-image-preview',
+  };
+}
+
+function setGeminiSettings(cfg) {
+  const s = readSettings();
+  const cur = getGeminiSettings();
+  const next = {
+    baseUrl: typeof cfg.baseUrl === 'string' && cfg.baseUrl.trim() ? cfg.baseUrl.trim() : cur.baseUrl,
+    defaultModel: typeof cfg.defaultModel === 'string' && cfg.defaultModel.trim() ? cfg.defaultModel.trim() : cur.defaultModel,
+    imageModel: typeof cfg.imageModel === 'string' && cfg.imageModel.trim() ? cfg.imageModel.trim() : cur.imageModel,
+    // Only touch the key when the client explicitly supplies a new one
+    // (apiKeyProvided); otherwise retain the stored value so re-saving other
+    // fields doesn't wipe it.
+    apiKey: cfg.apiKeyProvided ? String(cfg.apiKey || '').trim() : cur.apiKey,
+  };
+  s.gemini = next;
   writeSettings(s);
   return next;
 }
@@ -656,6 +695,76 @@ const server = http.createServer((req, res) => {
         });
       } catch (err) {
         sendJson(res, 500, { error: 'Failed to save provider settings: ' + err.message });
+      }
+    });
+  }
+
+  // ---- Gemini (nano banana asset generation) ----
+  if (req.method === 'GET' && pathname === '/api/gemini') {
+    const g = getGeminiSettings();
+    return sendJson(res, 200, {
+      baseUrl: g.baseUrl, defaultModel: g.defaultModel, imageModel: g.imageModel, hasKey: !!g.apiKey,
+    });
+  }
+  if (req.method === 'POST' && pathname === '/api/gemini') {
+    return readJsonBody(req, res, (b) => {
+      try {
+        const next = setGeminiSettings(b || {});
+        sendJson(res, 200, {
+          ok: true, baseUrl: next.baseUrl, defaultModel: next.defaultModel, imageModel: next.imageModel, hasKey: !!next.apiKey,
+        });
+      } catch (err) {
+        sendJson(res, 500, { error: 'Failed to save Gemini settings: ' + err.message });
+      }
+    });
+  }
+
+  // Generate an image asset with Gemini ("nano banana") and write it straight
+  // into a workspace. `path` is workspace-prefixed (e.g. "Business/Products/
+  // cartaja/assets/hero.png"); `refs` is an optional array of workspace-
+  // prefixed paths to existing images to compose/edit alongside the prompt.
+  // This is the same call the bundled `nano-banana` skill makes from inside
+  // an embedded agent session — see gemini-image.js's header comment.
+  if (req.method === 'POST' && pathname === '/api/gemini/generate-image') {
+    return readJsonBody(req, res, async (b) => {
+      try {
+        const g = getGeminiSettings();
+        const prompt = typeof (b && b.prompt) === 'string' ? b.prompt.trim() : '';
+        if (!prompt) return sendJson(res, 400, { error: 'missing prompt' });
+        const outPrefixed = b && b.path;
+        if (!outPrefixed) return sendJson(res, 400, { error: 'missing path' });
+        const r = resolveWorkspacePath(outPrefixed);
+        if (!r) return sendJson(res, 403, { error: 'forbidden or unknown workspace path' });
+
+        const refFps = [];
+        if (Array.isArray(b.refs)) {
+          for (const rp of b.refs) {
+            const rr = resolveWorkspacePath(rp);
+            if (!rr || !fs.existsSync(rr.fp)) {
+              return sendJson(res, 400, { error: 'reference image not found: ' + rp });
+            }
+            refFps.push(rr.fp);
+          }
+        }
+
+        const model = typeof b.model === 'string' && b.model.trim() ? b.model.trim() : g.imageModel;
+        const result = await geminiImage.generateImage({
+          apiKey: g.apiKey, baseUrl: g.baseUrl, model, prompt, refPaths: refFps,
+        });
+
+        fs.mkdirSync(path.dirname(r.fp), { recursive: true });
+        const tmp = r.fp + '.clawdoc-tmp-' + process.pid + '-' + Date.now();
+        fs.writeFileSync(tmp, result.data);
+        fs.renameSync(tmp, r.fp);
+        try { scheduleAutoCommit(r.root.name, r.rel); } catch {}
+
+        const stat = fs.statSync(r.fp);
+        sendJson(res, 200, {
+          ok: true, path: outPrefixed, bytes: stat.size, mimeType: result.mimeType,
+          text: result.text || undefined,
+        });
+      } catch (err) {
+        sendJson(res, 500, { error: err && err.message || String(err) });
       }
     });
   }
