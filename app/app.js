@@ -4796,6 +4796,33 @@
     })(),
   };
 
+  // Tool names only — they become `--allowedTools` argv for the CLI.
+  function dedupeTools(list) {
+    const out = [];
+    for (const t of list || []) {
+      if (/^[A-Za-z][A-Za-z0-9_]*$/.test(t) && !out.includes(t)) out.push(t);
+    }
+    return out;
+  }
+
+  // `--allowedTools` is read by the CLI at spawn time, so granting a tool to a
+  // session that already has a `claude` process running does nothing — the
+  // grant only took effect on the *next* spawn. That's why approving a tool
+  // and sending another message still came back denied. Recycle the connection
+  // instead: the socket closes, and the next turn spawns a fresh CLI with the
+  // updated allowlist, resumed from the same session id so no context is lost.
+  // Deferred while a turn is in flight — closing mid-turn would kill it.
+  function agApplyAllowlist(s) {
+    if (!s) return;
+    if (s.running) { s.allowlistDirty = true; return; }
+    s.allowlistDirty = false;
+    if (s.ws) {
+      s.recycling = true;
+      try { s.ws.close(); } catch {}
+    }
+    s.ws = null;
+  }
+
   // Default to auto-accepting edits so the common "make me a file" case works.
   // (The installed CLI has no headless permission-prompt mechanism, so the
   // "Ask before edits" / default mode can't show a prompt — it just denies.)
@@ -4824,7 +4851,11 @@
       // instead of getting silently denied by `claude -p`, which has no live
       // permission prompt. The user can still deny by removing them from the
       // session (Settings → Claude panel) if that ever ships.
-      allowedTools: ['WebSearch', 'WebFetch'],
+      // Anything the user allowed after a denial is restored with the tab —
+      // otherwise a reload silently revoked every grant they'd made.
+      allowedTools: dedupeTools(['WebSearch', 'WebFetch'].concat(opts.allowedTools || [])),
+      allowlistDirty: false,   // grant made mid-turn, applied at turn end
+      recycling: false,        // deliberate reconnect, not a session ending
       lastUserText: '',
       started: !!opts.started,               // has sent/loaded anything
       needsLoad: !!opts.needsLoad,           // restored tab whose transcript isn't fetched yet
@@ -5181,11 +5212,13 @@
          ' for this session so the next turn goes through, or retry now if the task isn’t done.')));
 
     const grantAllow = () => {
-      tools.forEach(t => { if (/^[A-Za-z][A-Za-z0-9_]*$/.test(t) && !s.allowedTools.includes(t)) s.allowedTools.push(t); });
+      s.allowedTools = dedupeTools(s.allowedTools.concat(tools));
+      agPersist();
+      // Hand the grant to the CLI, which only reads it when it starts.
+      agApplyAllowlist(s);
     };
     const doRetry = () => {
-      if (s.ws) { try { s.ws.close(); } catch {} }
-      s.ws = null;
+      agApplyAllowlist(s);
       if (s.lastUserText) agSendText(s, s.lastUserText);
     };
 
@@ -5255,6 +5288,8 @@
   function agEndTurn(s) {
     s.running = false;
     agHideWorking(s);
+    // A grant made mid-turn waits here so it doesn't interrupt the turn.
+    if (s.allowlistDirty) agApplyAllowlist(s);
     if (s === AS()) {
       agent.running = false;
       const btn = $('#agent-submit');
@@ -5301,6 +5336,12 @@
       else if (m.t === 'event') agHandleEvent(s, m.ev);
       else if (m.t === 'error') { agSystem(s, m.message, true); agEndTurn(s); }
       else if (m.t === 'exit') {
+        if (s.recycling) {
+          // We closed this one on purpose to pick up a new allowlist; the next
+          // message resumes the same Claude session.
+          agEndTurn(s); agStatus(s, 'ready');
+          return;
+        }
         if (s.stopping) {
           s.stopping = false;
           agSystem(s, 'Stopped. Send another message to continue.');
@@ -5310,7 +5351,10 @@
         agEndTurn(s); agStatus(s, 'ready');
       }
     };
-    ws.onclose = () => { if (s.ws === ws) { s.ws = null; if (s.running) agEndTurn(s); } };
+    ws.onclose = () => {
+      s.recycling = false;
+      if (s.ws === ws) { s.ws = null; if (s.running) agEndTurn(s); }
+    };
     ws.onerror = () => agStatus(s, 'connection error', 'error');
   }
 
@@ -5429,7 +5473,7 @@
         tabs: agent.tabs.map(t => ({
           id: t.id, title: t.title, sessionId: t.sessionId,
           workspace: t.sessionWorkspace, cwd: t.cwd, mode: t.mode,
-          model: t.model, started: t.started,
+          model: t.model, started: t.started, allowedTools: t.allowedTools,
         })),
       }));
     } catch {}
@@ -5444,6 +5488,7 @@
       const s = makeSession({
         id: t.id, title: t.title, sessionId: t.sessionId, workspace: t.workspace,
         cwd: t.cwd, mode: t.mode, model: t.model, started: t.started,
+        allowedTools: t.allowedTools,
         needsLoad: !!t.sessionId,
       });
       agSetEmpty(s);
@@ -5866,6 +5911,7 @@
     s.activeText = '';
     s.queued = '';
     s.allowedTools = ['WebSearch', 'WebFetch'];
+    s.allowlistDirty = false;
     s.working = null;
     s.title = 'New chat';
     agSetEmpty(s);
