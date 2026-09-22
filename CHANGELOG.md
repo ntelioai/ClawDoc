@@ -6,6 +6,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Fixed
+- The tree no longer misses folders and documents added from outside ClawDoc. Filesystem watch events aren't delivered on every filesystem — Google Drive / Dropbox virtual mounts, network shares, and anything written by a sync daemon often report nothing — so the server now also sweeps the workspaces on a timer (a readdir-only scan, diffed against the state as of the last reindex) and reindexes whatever the watcher missed. The UI resyncs whenever the window regains focus, which also asks the server to sweep right away (`POST /api/rescan`). Set `CLAWDOC_SWEEP_MS=0` to disable the sweep.
+- Live updates could stop for the rest of the session: an `index-changed` event arriving while a previous refresh was still running was dropped instead of queued, and a render error left the refresh flag stuck on, silently disabling every later update. Refreshes are now serialized and coalesced, and the flag is always cleared.
+- Changes made while the event stream was down (sleep, server restart, network blip) are now picked up — the client resyncs the index on reconnect instead of waiting for the next event.
+- `index.json` / `search.json` are written atomically. A client fetch that landed mid-rewrite read a truncated body, failed to parse, and quietly skipped a tree refresh.
+- A failed reindex spawn no longer takes the server down (unhandled `error` event on the child process), which had ended live updates entirely.
+
 ## [0.3.3] — 2026-07-25
 
 ### Added

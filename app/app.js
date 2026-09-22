@@ -5944,15 +5944,31 @@
     es: null,
     retryMs: 1000,
     // Track inflight refetches so two events arriving close together don't
-    // double-render the viewer.
+    // double-render the viewer. Events that land mid-refresh are coalesced
+    // into the next pass rather than dropped — dropping one used to leave the
+    // tree showing a stale index until something else forced a reload.
     refreshing: false,
+    queued: false,
+    pendingPaths: new Set(),
+    connected: false,
+    lastCatchUp: 0,
+    retryTimer: null,
   };
 
   function connectLiveEvents() {
+    if (live.retryTimer) { clearTimeout(live.retryTimer); live.retryTimer = null; }
+    if (live.es) return;   // never stack two streams on one client
     try {
       const es = new EventSource('/api/events');
       live.es = es;
-      es.addEventListener('open', () => { live.retryMs = 1000; });
+      es.addEventListener('open', () => {
+        live.retryMs = 1000;
+        // Reconnect after a drop (sleep, server restart, network blip): every
+        // change made while the stream was down went unannounced, so resync
+        // instead of waiting for the next one.
+        if (live.connected) catchUpLive();
+        live.connected = true;
+      });
       es.addEventListener('index-changed', (ev) => handleIndexChanged(ev));
       es.addEventListener('index-error', (ev) => {
         let data; try { data = JSON.parse(ev.data); } catch {}
@@ -5971,20 +5987,58 @@
         try { es.close(); } catch {}
         live.es = null;
         live.retryMs = Math.min(live.retryMs * 2, 30000);
-        setTimeout(connectLiveEvents, live.retryMs);
+        live.retryTimer = setTimeout(connectLiveEvents, live.retryMs);
       };
     } catch (err) {
       console.warn('clawdoc: live updates unavailable', err);
     }
   }
 
-  async function handleIndexChanged(ev) {
-    if (live.refreshing) return;
-    live.refreshing = true;
+  function handleIndexChanged(ev) {
     let data;
     try { data = JSON.parse(ev.data); } catch { data = { paths: [] }; }
-    const changedPaths = new Set(data.paths || []);
+    applyIndexChange(data.paths || []);
+  }
 
+  // Refetch the index and refresh whatever the viewer is showing. Serialized:
+  // an event arriving mid-refresh queues another pass (with its paths merged)
+  // so nothing is silently skipped.
+  function applyIndexChange(paths) {
+    for (const p of paths || []) live.pendingPaths.add(p);
+    if (live.refreshing) { live.queued = true; return; }
+    runIndexRefresh();
+  }
+
+  // Ask the server to look for changes its watcher may have missed (Google
+  // Drive and network mounts often report none), and resync from the index
+  // regardless. Called on reconnect and when the window regains focus.
+  function catchUpLive() {
+    const now = Date.now();
+    if (now - live.lastCatchUp < 2000) return;
+    live.lastCatchUp = now;
+    fetch('/api/rescan', { method: 'POST' }).catch(() => {});
+    applyIndexChange([]);
+    // Don't sit out the remaining backoff when the user is right here.
+    if (!live.es) { live.retryMs = 1000; connectLiveEvents(); }
+  }
+
+  async function runIndexRefresh() {
+    live.refreshing = true;
+    const changedPaths = new Set(live.pendingPaths);
+    live.pendingPaths.clear();
+    try {
+      await indexRefreshPass(changedPaths);
+    } catch (err) {
+      console.warn('clawdoc: live refresh failed', err);
+    } finally {
+      live.refreshing = false;
+      if (live.queued) { live.queued = false; setTimeout(runIndexRefresh, 0); }
+    }
+  }
+
+  // One refresh pass. Throwing here is fine — runIndexRefresh's finally clears
+  // the inflight flag, so a render error can't wedge live updates for good.
+  async function indexRefreshPass(changedPaths) {
     // Capture pre-reload state so we can compare and restore scroll.
     const prevDoc = state.currentDoc;
     const prevFolder = state.currentFolder;
@@ -5996,7 +6050,6 @@
       await loadIndex({ silent: true });
     } catch (err) {
       console.warn('clawdoc: silent reindex load failed', err);
-      live.refreshing = false;
       return;
     }
 
@@ -6026,7 +6079,6 @@
       } else if (wasTouched) {
         showEditorStaleBanner({ deleted: false });
       }
-      live.refreshing = false;
       return;
     }
 
@@ -6039,7 +6091,6 @@
           '<code>' + escapeHtml(prevDoc.path) + '</code>'
         );
         state.currentDoc = null;
-        live.refreshing = false;
         return;
       }
       // If the current doc is in the changed set, re-render with cache-bust.
@@ -6051,7 +6102,6 @@
         // Restore approximate scroll position so the user doesn't lose place.
         if (viewer) viewer.scrollTop = scrollTop;
       }
-      live.refreshing = false;
       return;
     }
 
@@ -6061,8 +6111,6 @@
       try { renderFolder(prevFolder); } catch {}
       if (viewer) viewer.scrollTop = scrollTop;
     }
-
-    live.refreshing = false;
   }
 
   function showEditorStaleBanner(opts) {
@@ -8172,6 +8220,13 @@
 
     loadIndex();
     connectLiveEvents();
+    // Coming back to ClawDoc is the moment stale content is most visible —
+    // the user has just been adding files in Finder or another app. Resync
+    // then, which also covers a stream that died while we were hidden.
+    window.addEventListener('focus', () => catchUpLive());
+    document.addEventListener('visibilitychange', () => {
+      if (!document.hidden) catchUpLive();
+    });
     gh.init();
   }
 

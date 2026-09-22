@@ -15,6 +15,9 @@ const gitOps = require('./git');
 const github = require('./github');
 const crm = require('./crm');
 const geminiImage = require('./gemini-image');
+// Workspace scan used as a safety net when the watcher misses events. Requiring
+// index.js does not index — it only runs its walk when invoked as a script.
+const { scanWorkspaces, diffScans } = require('./index.js');
 
 const SCRIPT_DIR = __dirname;
 const APP_DIR = path.join(SCRIPT_DIR, 'app');
@@ -409,6 +412,15 @@ const server = http.createServer((req, res) => {
 
   if (req.method === 'POST' && pathname === '/api/reindex') {
     return handleReindex(res);
+  }
+
+  // Cheap "did the watcher miss anything?" check. The client fires this when
+  // it regains focus, so files added in Finder while ClawDoc was in the
+  // background show up immediately instead of waiting for the sweep timer.
+  // Answers right away; any resulting reindex arrives over SSE as usual.
+  if (req.method === 'POST' && pathname === '/api/rescan') {
+    runSweep().catch(() => {});
+    return sendJson(res, 200, { ok: true });
   }
 
   if (req.method === 'GET' && pathname === '/api/events') {
@@ -903,8 +915,11 @@ function handleSaveSettings(req, res) {
     // Hot-swap the in-memory workspace list.
     ROOTS = namedRoots(resolved);
     ROOT_BY_NAME = new Map(ROOTS.map(r => [r.name, r]));
-    // Re-attach watchers to the new root set.
+    // Re-attach watchers to the new root set, and re-baseline the sweep —
+    // the old scan describes workspaces we no longer serve.
     startWatchers();
+    lastScan = null;
+    refreshScanBaseline();
     sendText(res, 200,
       JSON.stringify({ ok: true, workspaces: ROOTS.map(r => ({ name: r.name, path: r.path })) }),
       'application/json; charset=utf-8');
@@ -1558,12 +1573,21 @@ function runReindex() {
 
   const args = [path.join(SCRIPT_DIR, 'index.js')];
   for (const r of ROOTS) { args.push('-p', r.path); }
+  // Re-baseline the sweep from here, not from when the child finishes: an
+  // entry created during the child's walk then stays in the next diff, so a
+  // redundant reindex is possible but a missed one isn't.
+  refreshScanBaseline();
   const child = spawn(process.execPath, args, {
     stdio: ['ignore', 'pipe', 'pipe'],
     env: { ...process.env, ELECTRON_RUN_AS_NODE: '1' },
   });
   let errBuf = '';
   child.stderr.on('data', d => { errBuf += d.toString(); });
+  // A failed spawn emits 'error'; without a listener that throws and takes the
+  // server down, which would silently end all live updates.
+  child.on('error', (err) => {
+    errBuf += (err && err.message) || String(err);
+  });
   child.on('close', (code) => {
     reindexInFlight = false;
     if (code === 0) {
@@ -1576,6 +1600,78 @@ function runReindex() {
       scheduleReindex();
     }
   });
+}
+
+// ---------- watcher safety net ----------
+// chokidar only reports what the OS tells it, and some filesystems tell it
+// nothing: Google Drive / Dropbox virtual mounts, network shares, and files
+// landing via a sync daemon. On those, a folder or document added "from the
+// filesystem" never reaches the tree. So we also poll — a readdir-only scan of
+// the workspaces, diffed against the state as of the last reindex. Set
+// CLAWDOC_SWEEP_MS=0 to turn it off.
+const SWEEP_MS = Number(process.env.CLAWDOC_SWEEP_MS ?? 10_000);
+const SWEEP_MAX_MS = 120_000;
+let lastScan = null;       // Set of entries as of the last reindex
+let scanBusy = false;      // one scan at a time, whoever asked for it
+let lastScanMs = 0;        // how long the last scan took, for backoff
+let baselinePending = false;
+let sweepTimer = null;
+
+// Record the current workspace state as "indexed". Anything that shows up
+// afterwards is what the sweep reports.
+async function refreshScanBaseline() {
+  // A scan is already running for the sweep; redo the baseline once it's done,
+  // otherwise it would keep describing the workspace before this reindex.
+  if (scanBusy) { baselinePending = true; return; }
+  scanBusy = true;
+  const t0 = Date.now();
+  try { lastScan = await scanWorkspaces(ROOTS); }
+  catch (err) { console.error('clawdoc sweep scan failed:', err && err.message || err); }
+  finally {
+    lastScanMs = Date.now() - t0;
+    scanBusy = false;
+  }
+  if (baselinePending) { baselinePending = false; await refreshScanBaseline(); }
+}
+
+async function runSweep() {
+  // A reindex already on its way will pick up everything anyway.
+  if (scanBusy || reindexInFlight || reindexTimer) return;
+  if (!lastScan) return refreshScanBaseline();
+  scanBusy = true;
+  const t0 = Date.now();
+  let scan = null;
+  try { scan = await scanWorkspaces(ROOTS); }
+  catch (err) { console.error('clawdoc sweep scan failed:', err && err.message || err); }
+  finally {
+    lastScanMs = Date.now() - t0;
+    scanBusy = false;
+  }
+  if (!scan) return;
+  const changed = diffScans(lastScan, scan);
+  lastScan = scan;
+  if (!changed.length) return;
+  console.log(`clawdoc: sweep found ${changed.length} change${changed.length === 1 ? '' : 's'} the watcher missed — reindexing`);
+  for (const p of changed) pendingChangedPaths.add(p);
+  scheduleReindex();
+}
+
+// Self-rescheduling so a slow scan (a large or remote workspace) can't stack
+// up: the next tick is scheduled once the previous one finishes, and backs off
+// to 10x the scan's own cost so the sweep stays a background concern.
+function startSweeper() {
+  if (sweepTimer) { clearTimeout(sweepTimer); sweepTimer = null; }
+  if (!(SWEEP_MS > 0)) return;
+  const tick = async () => {
+    sweepTimer = null;
+    try { await runSweep(); }
+    catch (err) { console.error('clawdoc sweep error:', err && err.message || err); }
+    const delay = Math.min(SWEEP_MAX_MS, Math.max(SWEEP_MS, lastScanMs * 10));
+    sweepTimer = setTimeout(tick, delay);
+    if (sweepTimer.unref) sweepTimer.unref();
+  };
+  sweepTimer = setTimeout(tick, SWEEP_MS);
+  if (sweepTimer.unref) sweepTimer.unref();
 }
 
 function startWatchers() {
@@ -2484,5 +2580,8 @@ server.listen(PORT, '127.0.0.1', () => {
     console.log(`       no index found — click "Reindex" in the UI or run: node ${path.relative(process.cwd(), path.join(SCRIPT_DIR, 'index.js'))}`);
   }
   startWatchers();
-  console.log(`       watching ${ROOTS.length} workspace${ROOTS.length === 1 ? '' : 's'} for changes`);
+  refreshScanBaseline();
+  startSweeper();
+  console.log(`       watching ${ROOTS.length} workspace${ROOTS.length === 1 ? '' : 's'} for changes`
+    + (SWEEP_MS > 0 ? ` (+ ${Math.round(SWEEP_MS / 1000)}s sweep for filesystems that don't report them)` : ''));
 });

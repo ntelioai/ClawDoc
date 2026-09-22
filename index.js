@@ -328,6 +328,72 @@ function buildBacklinks(docs) {
   for (const d of docs) d.backlinks = Array.from(new Set(backlinks.get(d.path) || []));
 }
 
+// index.json is served over HTTP while a reindex may be rewriting it. A plain
+// writeFileSync truncates first, so a client fetch landing mid-write reads a
+// short/!JSON body, fails to parse, and silently skips a tree refresh. Publish
+// with a rename instead — the temp name matches the watcher's ignore filter so
+// it doesn't fire an event of its own.
+function writeJsonAtomic(fp, data) {
+  const tmp = fp + '.clawdoc-tmp-' + process.pid;
+  fs.writeFileSync(tmp, data);
+  fs.renameSync(tmp, fp);
+}
+
+// ---------- external-change sweep (watcher safety net) ----------
+// Filesystem watch events are not guaranteed. Google Drive / Dropbox virtual
+// mounts, network shares and anything written by a sync daemon rather than by
+// a local process routinely deliver them late or not at all, so a folder or
+// document that appears "from the filesystem" can stay missing from the tree
+// until a manual reindex. serve.js polls this scan and reindexes when it finds
+// something the watcher never reported.
+//
+// Entry paths and kinds only — no stat() per file, so it stays cheap enough to
+// run on a timer over a large (and possibly remote) workspace. That covers
+// additions, deletions and renames; in-place edits to an existing file still
+// rely on the watcher.
+async function sweepWalk(dir, ignores, root, out) {
+  let entries;
+  try { entries = await fs.promises.readdir(dir, { withFileTypes: true }); }
+  catch { return; }
+  for (const e of entries) {
+    const full = path.join(dir, e.name);
+    const rel = path.relative(root.path, full);
+    if (shouldIgnore(rel, e.name, ignores)) continue;
+    const prefixed = root.name + '/' + rel.split(path.sep).join('/');
+    if (e.isDirectory()) {
+      out.add(prefixed + '/');
+      await sweepWalk(full, ignores, root, out);
+    } else if (e.isFile()) {
+      out.add(prefixed);
+    }
+  }
+}
+
+// Set of workspace-prefixed entries; directories carry a trailing slash so a
+// file replaced by a folder of the same name still reads as a change.
+async function scanWorkspaces(roots) {
+  const ignores = [...DEFAULT_IGNORES, ...readIgnoreFile()];
+  const out = new Set();
+  for (const root of roots) {
+    const rootIgnores = ignores.slice();
+    const scriptRel = path.relative(root.path, SCRIPT_DIR);
+    if (scriptRel && !scriptRel.startsWith('..') && !path.isAbsolute(scriptRel)) {
+      rootIgnores.push(scriptRel);
+    }
+    await sweepWalk(root.path, rootIgnores, root, out);
+  }
+  return out;
+}
+
+// Paths present in one scan but not the other, as the client's path keys
+// (trailing slash stripped).
+function diffScans(prev, next) {
+  const changed = new Set();
+  for (const p of next) if (!prev.has(p)) changed.add(p.replace(/\/$/, ''));
+  for (const p of prev) if (!next.has(p)) changed.add(p.replace(/\/$/, ''));
+  return Array.from(changed);
+}
+
 function main() {
   const ignores = [...DEFAULT_IGNORES, ...readIgnoreFile()];
   const docs = [];
@@ -367,13 +433,13 @@ function main() {
       durationMs: Date.now() - t0,
     },
   };
-  fs.writeFileSync(INDEX_PATH, JSON.stringify(index));
+  writeJsonAtomic(INDEX_PATH, JSON.stringify(index));
 
   // search.json: full body text keyed by path, consumed by the in-browser
   // MiniSearch index. Kept out of index.json so the doc list stays lean.
   const texts = {};
   for (const [p, b] of fullBodies) texts[p] = b;
-  fs.writeFileSync(SEARCH_PATH, JSON.stringify({ generatedAt: index.generatedAt, texts }));
+  writeJsonAtomic(SEARCH_PATH, JSON.stringify({ generatedAt: index.generatedAt, texts }));
 
   const rootSummary = ROOTS.map(r => r.name + ' → ' + r.path).join(', ');
   const s = index.stats;
@@ -384,4 +450,7 @@ function main() {
   console.log(`        -> ${SEARCH_PATH}`);
 }
 
-main();
+module.exports = { scanWorkspaces, diffScans };
+
+// Only index when run as a script — serve.js requires this file for the sweep.
+if (require.main === module) main();
